@@ -61,9 +61,7 @@ def _static_loader(func: str) -> StaticFetcher:
     return fetch
 
 
-def _seasonal(
-    name: str, description: str, first: int, func: str, **kwargs: Any
-) -> DatasetSpec:
+def _seasonal(name: str, description: str, first: int, func: str, **kwargs: Any) -> DatasetSpec:
     return DatasetSpec(
         name=name,
         description=description,

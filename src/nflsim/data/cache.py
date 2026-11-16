@@ -13,7 +13,6 @@ change, so they are fetched exactly once.
 from __future__ import annotations
 
 import datetime as dt
-import os
 import time
 from collections.abc import Iterable, Mapping
 from pathlib import Path
@@ -109,4 +108,4 @@ class DataCache:
         path.parent.mkdir(parents=True, exist_ok=True)
         tmp = path.with_suffix(".parquet.tmp")
         frame.write_parquet(tmp)
-        os.replace(tmp, path)
+        tmp.replace(path)
