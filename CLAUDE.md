@@ -1,0 +1,64 @@
+# NFL Game Simulator (nflsim)
+
+Monte Carlo simulator for single NFL games. Given two teams and a week, it simulates the game many times and reports win probability, score distributions, spread/total, and key player stat lines. It accounts for season stats, player-level matchups, and injuries on both rosters, and supports "what-if" scenarios.
+
+## Stack
+- Python 3.11+, managed with `uv`
+- Layout: `src/nflsim/`, `tests/`, `docs/`, `notebooks/` (optional)
+- Data: nflverse via `nflreadpy` (play-by-play, schedules, rosters, player stats, injuries, depth charts, snap counts, PFR advanced stats, Next Gen Stats)
+- polars (chosen in Phase 0; do not mix in pandas), pydantic, numpy, typer (CLI), pytest, ruff, mypy
+- Cache all data as parquet under `data/` (gitignored)
+
+## Commands
+- Install: `uv sync`
+- Test: `uv run pytest`
+- Lint/format: `uv run ruff check . && uv run ruff format .` (use `--no-cache` before pushing; a stale cache once hid CI failures)
+- Types: `uv run mypy` (strict; checks `src` and `tests` via pyproject)
+- Fetch data: `uv run nflsim fetch --seasons 2016-2025 --datasets pbp,schedules`
+- List datasets: `uv run nflsim datasets`
+- Backtest (planned, Phase 1): `uv run nflsim backtest --seasons 2021-2024`
+- Simulate (planned): `uv run nflsim simulate --home KC --away BUF --week 12 --n 10000 --seed 42`
+
+(Update this list as commands are added.)
+
+## Working agreement
+- Build ONE roadmap phase at a time, then stop and summarize. Do not start the next phase unprompted.
+- Before coding: give a 5-10 line plan, and list assumptions and data gaps.
+- One feature per branch, conventional commits, small reviewable PRs.
+- Write tests alongside code, using small fixture data. Tests must never hit the network.
+- End each phase with: what was added, how to run it, test results, backtest numbers, suggested next step.
+- **No Claude attribution.** Never add `Co-Authored-By: Claude` trailers or "Generated with Claude Code" lines to commits or PRs. Commits are authored by the repo owner's git identity only.
+
+## Modeling rules
+- **No future leakage.** When simulating week W, use only information available before kickoff (stats through W-1, injury report as of that week).
+- **Reproducibility.** Every simulation takes an explicit RNG seed.
+- **No hardcoded magic numbers.** Shrinkage strengths, injury play-probabilities, home-field value, noise levels, etc. live in a config file.
+- **Shrink small samples** toward league/position averages (empirical Bayes). Early-season ratings blend in prior-season data.
+- **Degrade gracefully.** If a matchup or injury has no data, fall back to a coarser estimate and flag it in the output. Never fabricate precision.
+- **Injuries are probabilistic.** Sample player availability per simulation run from report status (Out/Doubtful/Questionable/limited/DNP). Replace unavailable players with depth chart backups at the backup's own rating. Include BOTH teams.
+
+## Evaluation (the most important rule)
+- The Phase 1 baseline and backtest harness are the benchmark. Every later phase must be backtested against the previous one.
+- Report: MAE of predicted vs. actual margin, Brier score and log loss for win probability, calibration table, and comparison to closing Vegas lines where available.
+- If a change does not improve results, say so plainly. More factors does not automatically mean a better model. Do not claim success without numbers.
+- NFL outcomes are high-variance. The goal is a well-calibrated model, not certainty.
+
+## Roadmap
+0. ✅ Scaffold: repo, pyproject, CI, data loaders with parquet caching, README
+1. Baseline game sim: team offense/defense ratings (EPA/play, success rate, pace), shrinkage, score distributions, backtest harness
+2. Player-level ratings by position, snap-weighted, with shrinkage
+3. Injuries: weekly reports and practice participation, availability sampling, depth chart replacement
+4. Matchups: pass rush vs. pass block, WR/TE vs. CB/S, run game vs. run defense, QB vs. pressure/scheme
+5. Tendencies and game script: play-calling, pace, 4th down, red zone; engine moves from game-level to drive-level to play-level
+6. Context: home field, rest/travel, weather/dome, coaching, divisional familiarity
+7. Scenarios and output: overrides ("QB out"), N-run summaries, per-player stat lines, CLI, optional Streamlit dashboard
+
+Mark phases done here as they merge.
+
+## Current status
+Phase 0 done: merged to `main`, CI green on Python 3.11 and 3.12. Next: propose the Phase 1 plan before coding.
+
+Data notes:
+- Default fetch range is 2016 onward (config `default_first_season`).
+- In `schedules`, `spread_line` is positive when the HOME team is favored, and `result` is home score minus away score.
+- `DataCache.load` returns whole seasons; leakage filtering (stats through W-1) is each model's job.
