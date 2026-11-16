@@ -89,6 +89,15 @@ class SimConfig(BaseModel):
     overtime_points: int = Field(default=3, ge=1)
 
 
+class BacktestConfig(BaseModel):
+    """Walk-forward backtest settings."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    # Equal-width bins of predicted home win probability in the calibration table.
+    calibration_bins: int = Field(default=10, ge=2)
+
+
 class Settings(BaseModel):
     """Top-level nflsim settings. New phases add new sections here."""
 
@@ -98,6 +107,7 @@ class Settings(BaseModel):
     ratings: RatingsConfig = RatingsConfig()
     model: ModelConfig = ModelConfig()
     sim: SimConfig = SimConfig()
+    backtest: BacktestConfig = BacktestConfig()
 
 
 def load_settings(path: Path | None = None) -> Settings:

@@ -60,11 +60,27 @@ class DataCache:
         Seasonal datasets need ``seasons``; frames from different seasons are stacked
         with missing columns filled as null, since nflverse schemas drift over time.
         """
+        paths = self.ensure(name, seasons, refresh=refresh)
+        frames = [pl.read_parquet(p) for p in paths]
+        return frames[0] if len(frames) == 1 else pl.concat(frames, how="diagonal_relaxed")
+
+    def scan(
+        self, name: str, seasons: Iterable[int] | None = None, *, refresh: bool = False
+    ) -> pl.LazyFrame:
+        """Like ``load`` but lazy, so only the columns a query uses are read from disk."""
+        paths = self.ensure(name, seasons, refresh=refresh)
+        frames = [pl.scan_parquet(p) for p in paths]
+        return frames[0] if len(frames) == 1 else pl.concat(frames, how="diagonal_relaxed")
+
+    def ensure(
+        self, name: str, seasons: Iterable[int] | None = None, *, refresh: bool = False
+    ) -> list[Path]:
+        """Fetch whatever is missing or stale and return the cached parquet paths."""
         spec = self.spec(name)
         if not spec.seasonal:
             if seasons is not None:
                 raise ValueError(f"dataset {name!r} is not split by season")
-            return self._load_one(spec, None, refresh)
+            return [self._ensure_one(spec, None, refresh)]
 
         if seasons is None:
             raise ValueError(f"dataset {name!r} needs seasons")
@@ -78,14 +94,12 @@ class DataCache:
         too_late = [s for s in wanted if s > self.current_season]
         if too_late:
             raise ValueError(f"season(s) {too_late} have not started yet")
+        return [self._ensure_one(spec, s, refresh) for s in wanted]
 
-        frames = [self._load_one(spec, s, refresh) for s in wanted]
-        return pl.concat(frames, how="diagonal_relaxed")
-
-    def _load_one(self, spec: DatasetSpec, season: int | None, refresh: bool) -> pl.DataFrame:
+    def _ensure_one(self, spec: DatasetSpec, season: int | None, refresh: bool) -> Path:
         path = self.path(spec.name, season)
         if not refresh and path.exists() and not self._is_stale(path, season):
-            return pl.read_parquet(path)
+            return path
 
         if season is None:
             assert spec.fetch_all is not None
@@ -94,7 +108,7 @@ class DataCache:
             assert spec.fetch_season is not None
             frame = spec.fetch_season(season)
         self._write(frame, path)
-        return frame
+        return path
 
     def _is_stale(self, path: Path, season: int | None) -> bool:
         if season is not None and season < self.current_season:

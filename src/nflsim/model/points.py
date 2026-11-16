@@ -84,9 +84,10 @@ def build_games(
 ) -> pl.DataFrame:
     """One row per scheduled game with both teams' pre-game ratings attached.
 
-    Columns: game identifiers, scores (null if unplayed), Vegas lines, ``home_sign``,
-    ``league_ppg``, ``h_*``/``a_*`` ratings and prior flags, and ``has_ratings`` (False
-    when any rating is missing, e.g. week 1 of the first cached season).
+    Columns: game identifiers, scores (null if unplayed), Vegas spread/total/moneylines,
+    ``home_sign``, ``league_ppg``, ``h_*``/``a_*`` ratings and prior flags, and
+    ``has_ratings`` (False when any rating is missing, e.g. week 1 of the first cached
+    season).
     """
     sched = normalize_teams(schedules, ["home_team", "away_team"]).cast(
         {"season": pl.Int32, "week": pl.Int32}
@@ -118,6 +119,8 @@ def build_games(
             pl.col("away_score").cast(pl.Float64),
             pl.col("spread_line").cast(pl.Float64),
             pl.col("total_line").cast(pl.Float64),
+            pl.col("home_moneyline").cast(pl.Float64),
+            pl.col("away_moneyline").cast(pl.Float64),
             pl.when(pl.col("location") == "Neutral").then(0.0).otherwise(1.0).alias("home_sign"),
         )
         .join(

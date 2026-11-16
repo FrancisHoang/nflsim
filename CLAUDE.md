@@ -16,8 +16,8 @@ Monte Carlo simulator for single NFL games. Given two teams and a week, it simul
 - Types: `uv run mypy` (strict; checks `src` and `tests` via pyproject)
 - Fetch data: `uv run nflsim fetch --seasons 2016-2025 --datasets pbp,schedules`
 - List datasets: `uv run nflsim datasets`
-- Backtest (planned, Phase 1): `uv run nflsim backtest --seasons 2021-2024`
-- Simulate (planned): `uv run nflsim simulate --home KC --away BUF --week 12 --n 10000 --seed 42`
+- Backtest: `uv run nflsim backtest --seasons 2021-2024 --n 10000 --seed 42` (`--features off_epa,def_epa` to compare feature sets, `--output preds.parquet` to save per-game predictions)
+- Simulate: `uv run nflsim simulate --home KC --away BUF --season 2025 --week 12 --n 10000 --seed 42` (`--neutral` for neutral sites)
 
 (Update this list as commands are added.)
 
@@ -56,9 +56,10 @@ Monte Carlo simulator for single NFL games. Given two teams and a week, it simul
 Mark phases done here as they merge.
 
 ## Current status
-Phase 0 done: merged to `main`, CI green on Python 3.11 and 3.12. Next: propose the Phase 1 plan before coding.
+Phase 0 done: merged to `main`, CI green on Python 3.11 and 3.12. Phase 1 (baseline sim + backtest) built on branch `feat/phase1-baseline`, awaiting review/merge.
 
 Data notes:
 - Default fetch range is 2016 onward (config `default_first_season`).
 - In `schedules`, `spread_line` is positive when the HOME team is favored, and `result` is home score minus away score.
-- `DataCache.load` returns whole seasons; leakage filtering (stats through W-1) is each model's job.
+- `DataCache.load` returns whole seasons; leakage filtering (stats through W-1) is each model's job. Use `DataCache.scan` for pbp (lazy, reads only needed columns).
+- Schedules keep historical team codes (OAK, SD, STL); pbp uses current ones (LV, LAC, LA). Normalize with `nflsim.data.normalize_teams` before joining.
