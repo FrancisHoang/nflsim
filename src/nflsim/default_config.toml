@@ -45,3 +45,7 @@ min_expected_points = 3.0
 # Points added to the winner when a simulated game ends tied (overtime, usually a field goal).
 # The overtime winner is drawn with probability proportional to each team's expected points.
 overtime_points = 3
+
+[backtest]
+# Equal-width bins of predicted home win probability in the calibration table.
+calibration_bins = 10

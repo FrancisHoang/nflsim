@@ -30,6 +30,8 @@ def schedule(rows: list[tuple[Any, ...]]) -> pl.DataFrame:
         pl.lit("REG").alias("game_type"),
         pl.lit(-3.0).alias("spread_line"),
         pl.lit(44.0).alias("total_line"),
+        pl.lit(-150.0).alias("home_moneyline"),
+        pl.lit(130.0).alias("away_moneyline"),
     )
 
 

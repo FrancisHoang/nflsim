@@ -5,10 +5,13 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Annotated
 
+import polars as pl
 import typer
 
+from nflsim.backtest import calibration, format_table, summarize, walk_forward
 from nflsim.config import load_settings
 from nflsim.data import DATASETS, DataCache, parse_seasons
+from nflsim.pipeline import load_games, matchup_row, predict_matchup
 
 app = typer.Typer(help="Monte Carlo NFL game simulator.", no_args_is_help=True)
 
@@ -63,6 +66,100 @@ def fetch(
         else:
             frame = cache.load(name, refresh=refresh)
         typer.echo(f"{name}: {frame.height:,} rows cached")
+
+
+@app.command()
+def backtest(
+    seasons: Annotated[str, typer.Option(help="Test seasons, e.g. '2021-2024'.")] = "2021-2024",
+    n: Annotated[int, typer.Option(help="Simulations per game.", min=1)] = 10_000,
+    seed: Annotated[int, typer.Option(help="RNG seed (season s uses seed + s).")] = 42,
+    features: Annotated[
+        str | None,
+        typer.Option(help="Comma-separated points-model features (default: from config)."),
+    ] = None,
+    output: Annotated[
+        Path | None, typer.Option(help="Write per-game predictions to this parquet file.")
+    ] = None,
+    config: ConfigOption = None,
+) -> None:
+    """Walk-forward backtest: fit on earlier seasons, predict each test season."""
+    settings = load_settings(config)
+    if features is not None:
+        names = tuple(f.strip() for f in features.split(",") if f.strip())
+        model_cfg = settings.model.model_validate(
+            {**settings.model.model_dump(), "features": names}
+        )
+        settings = settings.model_copy(update={"model": model_cfg})
+    test_seasons = parse_seasons(seasons)
+    games = load_games(DataCache(settings.data), settings, max(test_seasons))
+    predictions, fits = walk_forward(games, settings, test_seasons, n, seed)
+
+    typer.echo(f"features: {', '.join(settings.model.features) or '(none)'}")
+    typer.echo(f"simulations per game: {n:,}, seed: {seed}\n")
+    for fit in fits:
+        m = fit.model
+        coefs = ", ".join(f"{f}={c:+.2f}" for f, c in zip(m.features, m.coefs, strict=True))
+        skipped = f", {fit.skipped_games} skipped (no ratings)" if fit.skipped_games else ""
+        typer.echo(
+            f"{fit.season}: trained on {fit.train_seasons[0]}-{fit.train_seasons[-1]} "
+            f"({m.train_games} games), predicted {fit.test_games}{skipped}; "
+            f"home={m.home:+.2f}/team, dispersion={m.dispersion:.1f}, {coefs}"
+        )
+    fallback = predictions.filter(pl.col("vegas_p_source") == "spread").height
+    if fallback:
+        typer.echo(f"note: {fallback} game(s) had no moneyline; Vegas win prob from spread")
+
+    digits = [("margin_mae", 2), ("total_mae", 2), ("brier", 4), ("log_loss", 4), ("pick_rate", 3)]
+    typer.echo("\nMetrics (lower is better, except pick_rate = share of winners picked):")
+    typer.echo(format_table(summarize(predictions), digits))
+    bins = settings.backtest.calibration_bins
+    for method in ("model", "vegas"):
+        typer.echo(f"\nCalibration ({method}): predicted vs. actual home win rate")
+        typer.echo(format_table(calibration(predictions, method, bins), [("lo", 1), ("hi", 1)]))
+
+    if output is not None:
+        output.parent.mkdir(parents=True, exist_ok=True)
+        predictions.write_parquet(output)
+        typer.echo(f"\npredictions written to {output}")
+
+
+@app.command()
+def simulate(
+    home: Annotated[str, typer.Option(help="Home team abbreviation, e.g. KC.")],
+    away: Annotated[str, typer.Option(help="Away team abbreviation, e.g. BUF.")],
+    season: Annotated[int, typer.Option(help="Season of the game.")],
+    week: Annotated[int, typer.Option(help="Week of the game (ratings use weeks before it).")],
+    n: Annotated[int, typer.Option(help="Number of simulations.", min=1)] = 10_000,
+    seed: Annotated[int, typer.Option(help="RNG seed.")] = 42,
+    neutral: Annotated[bool, typer.Option(help="Neutral site (no home-field value).")] = False,
+    config: ConfigOption = None,
+) -> None:
+    """Simulate one game from ratings as of the given week."""
+    settings = load_settings(config)
+    extra = matchup_row(season, week, home, away, neutral)
+    games = load_games(DataCache(settings.data), settings, season, extra=extra)
+    try:
+        r = predict_matchup(games, settings, n, seed)
+    except ValueError as err:
+        raise typer.BadParameter(str(err)) from err
+
+    site = "neutral site" if neutral else f"at {r.home}"
+    typer.echo(f"{r.away} {site}, {r.season} week {r.week} ({r.n:,} simulations, seed {r.seed})")
+    typer.echo(f"  {r.home} win probability: {r.home_win_prob:.1%}")
+    typer.echo(f"  {r.away} win probability: {1 - r.home_win_prob:.1%}")
+    typer.echo(f"  expected points: {r.home} {r.expected_home:.1f}, {r.away} {r.expected_away:.1f}")
+    typer.echo(f"  mean margin ({r.home} minus {r.away}): {r.mean_margin:+.1f}")
+    typer.echo(f"  mean total: {r.mean_total:.1f}")
+    qs = list(r.margin_quantiles)
+    typer.echo("  quantiles:   " + "  ".join(f"{int(q * 100):>4}%" for q in qs))
+    for label, values in (
+        (f"{r.home} pts", r.home_quantiles),
+        (f"{r.away} pts", r.away_quantiles),
+        ("margin", r.margin_quantiles),
+    ):
+        typer.echo(f"  {label:<11}" + "  ".join(f"{values[q]:>5.0f}" for q in qs))
+    for flag in r.flags:
+        typer.echo(f"  flag: {flag}")
 
 
 if __name__ == "__main__":
