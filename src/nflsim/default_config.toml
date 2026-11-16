@@ -27,3 +27,21 @@ prior_plays_rush_epa = 400.0  # rushing EPA is noisier, so shrink harder
 prior_games_pace = 4.0
 # Share of last season's deviation from league average kept in this season's prior.
 carryover = 0.5
+
+[model]
+# Game-level points model (Phase 1). Each team's expected points are
+#   league points per team-game + intercept + features . coefficients +/- home value,
+# with coefficients fit by least squares on earlier seasons only.
+# Features (each a deviation from league average as of the game):
+#   off_epa, off_success, off_pace: the scoring team's offense
+#   def_epa, def_success, def_pace: the opponent's defense (EPA/success allowed) and pace
+features = ["off_epa", "def_epa", "off_success", "def_success", "off_pace", "def_pace"]
+# Number of seasons before the predicted season used to fit the coefficients.
+train_seasons = 5
+# Expected points are floored here so the score distribution stays valid.
+min_expected_points = 3.0
+
+[sim]
+# Points added to the winner when a simulated game ends tied (overtime, usually a field goal).
+# The overtime winner is drawn with probability proportional to each team's expected points.
+overtime_points = 3

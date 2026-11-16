@@ -9,7 +9,7 @@ from __future__ import annotations
 import tomllib
 from importlib import resources
 from pathlib import Path
-from typing import Self
+from typing import Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -55,6 +55,40 @@ class DataConfig(BaseModel):
     current_season_max_age_hours: float = Field(default=12.0, gt=0)
 
 
+PointsFeature = Literal["off_epa", "def_epa", "off_success", "def_success", "off_pace", "def_pace"]
+
+
+class ModelConfig(BaseModel):
+    """Game-level points model: ratings -> expected points per team (Phase 1)."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    features: tuple[PointsFeature, ...] = (
+        "off_epa",
+        "def_epa",
+        "off_success",
+        "def_success",
+        "off_pace",
+        "def_pace",
+    )
+    train_seasons: int = Field(default=5, ge=1)
+    min_expected_points: float = Field(default=3.0, gt=0)
+
+    @model_validator(mode="after")
+    def _unique_features(self) -> Self:
+        if len(set(self.features)) != len(self.features):
+            raise ValueError("features must not repeat")
+        return self
+
+
+class SimConfig(BaseModel):
+    """Monte Carlo score simulation."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    overtime_points: int = Field(default=3, ge=1)
+
+
 class Settings(BaseModel):
     """Top-level nflsim settings. New phases add new sections here."""
 
@@ -62,6 +96,8 @@ class Settings(BaseModel):
 
     data: DataConfig = DataConfig()
     ratings: RatingsConfig = RatingsConfig()
+    model: ModelConfig = ModelConfig()
+    sim: SimConfig = SimConfig()
 
 
 def load_settings(path: Path | None = None) -> Settings:
