@@ -1,0 +1,12 @@
+# Default nflsim configuration.
+# Every tunable number in the project lives in a file like this one, never in code.
+# Copy this file, edit it, and pass it with `--config path/to/file.toml` to override.
+
+[data]
+# Where cached parquet files are written. Relative paths resolve from the working directory.
+cache_dir = "data"
+# First season fetched when no seasons are given (NGS data starts in 2016).
+default_first_season = 2016
+# Cached files for the current, in-progress season are refetched once older than this.
+# Completed seasons never go stale.
+current_season_max_age_hours = 12.0

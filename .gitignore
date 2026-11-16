@@ -1,0 +1,22 @@
+# Cached nflverse data (large; re-downloadable with `nflsim fetch`)
+/data/
+
+# Python / tooling
+.venv/
+__pycache__/
+*.py[cod]
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.coverage
+htmlcov/
+dist/
+build/
+*.egg-info/
+
+# Notebooks / editors / OS
+.ipynb_checkpoints/
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
