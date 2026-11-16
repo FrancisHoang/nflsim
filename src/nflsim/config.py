@@ -9,8 +9,40 @@ from __future__ import annotations
 import tomllib
 from importlib import resources
 from pathlib import Path
+from typing import Self
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+
+class RatingsConfig(BaseModel):
+    """Team offense/defense ratings built from play-by-play (Phase 1).
+
+    Every rating is an empirical-Bayes blend: ``(sum + k * prior) / (count + k)``, where
+    ``k`` is the prior strength below and the prior is the league average plus a
+    regressed share of the team's previous-season deviation from the league average.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    # Plays count toward ratings only when the offense's pre-snap win probability is in
+    # this window, to drop garbage time. Use 0.0 and 1.0 to keep every play.
+    min_wp: float = Field(default=0.05, ge=0, le=1)
+    max_wp: float = Field(default=0.95, ge=0, le=1)
+    # Prior strength, in plays, for each per-play metric.
+    prior_plays_epa: float = Field(default=300.0, gt=0)
+    prior_plays_success: float = Field(default=200.0, gt=0)
+    prior_plays_pass_epa: float = Field(default=250.0, gt=0)
+    prior_plays_rush_epa: float = Field(default=400.0, gt=0)
+    # Prior strength, in games, for pace (offensive plays per game).
+    prior_games_pace: float = Field(default=4.0, gt=0)
+    # Share of last season's deviation from league average carried into this season's prior.
+    carryover: float = Field(default=0.5, ge=0, le=1)
+
+    @model_validator(mode="after")
+    def _wp_window(self) -> Self:
+        if self.min_wp >= self.max_wp:
+            raise ValueError("min_wp must be below max_wp")
+        return self
 
 
 class DataConfig(BaseModel):
@@ -29,6 +61,7 @@ class Settings(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     data: DataConfig = DataConfig()
+    ratings: RatingsConfig = RatingsConfig()
 
 
 def load_settings(path: Path | None = None) -> Settings:

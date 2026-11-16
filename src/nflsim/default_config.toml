@@ -10,3 +10,20 @@ default_first_season = 2016
 # Cached files for the current, in-progress season are refetched once older than this.
 # Completed seasons never go stale.
 current_season_max_age_hours = 12.0
+
+[ratings]
+# Team offense/defense ratings from play-by-play. Starting values; the Phase 1 backtest
+# is what should settle them.
+# Only plays with the offense's win probability inside [min_wp, max_wp] are rated
+# (drops garbage time). Set 0.0 and 1.0 to rate every play.
+min_wp = 0.05
+max_wp = 0.95
+# Shrinkage prior strength in plays: rating = (sum + k * prior) / (plays + k).
+prior_plays_epa = 300.0
+prior_plays_success = 200.0
+prior_plays_pass_epa = 250.0
+prior_plays_rush_epa = 400.0  # rushing EPA is noisier, so shrink harder
+# Shrinkage prior strength for pace (offensive plays per game), in games.
+prior_games_pace = 4.0
+# Share of last season's deviation from league average kept in this season's prior.
+carryover = 0.5
