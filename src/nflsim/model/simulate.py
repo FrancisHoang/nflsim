@@ -34,13 +34,13 @@ class SimResult:
         return self.home + self.away
 
     def home_win_prob(self) -> FloatArray:
-        return np.mean(self.home > self.away, axis=1)
+        return np.asarray(np.mean(self.home > self.away, axis=1), dtype=np.float64)
 
     def mean_margin(self) -> FloatArray:
-        return np.mean(self.margin, axis=1)
+        return np.asarray(np.mean(self.margin, axis=1), dtype=np.float64)
 
     def mean_total(self) -> FloatArray:
-        return np.mean(self.total, axis=1)
+        return np.asarray(np.mean(self.total, axis=1), dtype=np.float64)
 
 
 def simulate_scores(
