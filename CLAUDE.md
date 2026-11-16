@@ -45,7 +45,7 @@ Monte Carlo simulator for single NFL games. Given two teams and a week, it simul
 
 ## Roadmap
 0. ✅ Scaffold: repo, pyproject, CI, data loaders with parquet caching, README
-1. Baseline game sim: team offense/defense ratings (EPA/play, success rate, pace), shrinkage, score distributions, backtest harness
+1. ✅ Baseline game sim: team offense/defense ratings (EPA/play, success rate, pace), shrinkage, score distributions, backtest harness
 2. Player-level ratings by position, snap-weighted, with shrinkage
 3. Injuries: weekly reports and practice participation, availability sampling, depth chart replacement
 4. Matchups: pass rush vs. pass block, WR/TE vs. CB/S, run game vs. run defense, QB vs. pressure/scheme
@@ -56,7 +56,17 @@ Monte Carlo simulator for single NFL games. Given two teams and a week, it simul
 Mark phases done here as they merge.
 
 ## Current status
-Phase 0 done: merged to `main`, CI green on Python 3.11 and 3.12. Phase 1 (baseline sim + backtest) built on branch `feat/phase1-baseline`, awaiting review/merge.
+Phase 0 and Phase 1 done and merged to `main` (Phase 1 via PR #1), CI green on Python 3.11 and 3.12.
+
+Phase 1 baseline (the benchmark; `nflsim backtest --seasons 2021-2024 --n 10000 --seed 42`, 1,139 games):
+
+| Method | Margin MAE | Total MAE | Brier | Log loss |
+|---|---|---|---|---|
+| Model | 10.17 | 10.69 | 0.2254 | 0.6437 |
+| Vegas close | 9.79 | 10.29 | 0.2112 | 0.6115 |
+| Home only | 11.00 | 10.90 | 0.2474 | 0.6893 |
+
+Known issues: predictions are under-confident (predicted margin SD 4.3 vs. Vegas 6.0); shrinkage strengths in `[ratings]` are untuned guesses; feature sets tie (defensive success rate unstable). Next: shrinkage tuning pass (tune against 2021-2023 backtest seasons, keep 2024 as a holdout), then propose the Phase 2 plan.
 
 Data notes:
 - Default fetch range is 2016 onward (config `default_first_season`).
