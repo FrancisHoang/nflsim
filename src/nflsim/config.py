@@ -98,6 +98,27 @@ class BacktestConfig(BaseModel):
     calibration_bins: int = Field(default=10, ge=2)
 
 
+class TuningConfig(BaseModel):
+    """Candidate values for the shrinkage grid search (``nflsim tune``)."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    prior_plays_epa: tuple[float, ...] = (50.0, 100.0, 200.0, 300.0, 500.0, 800.0)
+    prior_plays_success: tuple[float, ...] = (50.0, 100.0, 200.0, 400.0)
+    carryover: tuple[float, ...] = (0.3, 0.5, 0.7, 0.9)
+    prior_games_pace: tuple[float, ...] = (2.0, 4.0, 8.0)
+    wp_windows: tuple[tuple[float, float], ...] = ((0.05, 0.95), (0.0, 1.0), (0.1, 0.9))
+
+    @model_validator(mode="after")
+    def _non_empty(self) -> Self:
+        for name in ("prior_plays_epa", "prior_plays_success", "carryover", "prior_games_pace"):
+            if not getattr(self, name):
+                raise ValueError(f"tuning.{name} must list at least one value")
+        if not self.wp_windows:
+            raise ValueError("tuning.wp_windows must list at least one window")
+        return self
+
+
 class Settings(BaseModel):
     """Top-level nflsim settings. New phases add new sections here."""
 
@@ -108,6 +129,7 @@ class Settings(BaseModel):
     model: ModelConfig = ModelConfig()
     sim: SimConfig = SimConfig()
     backtest: BacktestConfig = BacktestConfig()
+    tuning: TuningConfig = TuningConfig()
 
 
 def load_settings(path: Path | None = None) -> Settings:
