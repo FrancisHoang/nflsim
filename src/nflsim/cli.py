@@ -10,7 +10,16 @@ import typer
 
 from nflsim.backtest import calibration, format_table, summarize, walk_forward
 from nflsim.config import load_settings
-from nflsim.data import DATASETS, DataCache, parse_seasons
+from nflsim.data import (
+    DATASETS,
+    PBP_PLAYER_COLUMNS,
+    DataCache,
+    id_coverage,
+    parse_seasons,
+    player_snaps,
+    roster_weeks,
+    unmatched_snaps,
+)
 from nflsim.pipeline import load_games, matchup_row, predict_matchup
 from nflsim.tuning import current_params, evaluate, evaluate_holdout, grid
 
@@ -240,3 +249,43 @@ def tune(
 
 if __name__ == "__main__":
     app()
+
+
+@app.command("player-coverage")
+def player_coverage(
+    seasons: Annotated[str, typer.Option(help="Seasons to check, e.g. '2016-2025'.")] = (
+        "2016-2025"
+    ),
+    top: Annotated[int, typer.Option(help="Unmatched players to list.", min=0)] = 10,
+    config: ConfigOption = None,
+) -> None:
+    """Report how well player IDs link across play-by-play, rosters and snap counts."""
+    settings = load_settings(config)
+    wanted = parse_seasons(seasons)
+    cache = DataCache(settings.data)
+    players = cache.load("players")
+    snaps = player_snaps(cache.load("snap_counts", wanted), players)
+    rosters = roster_weeks(cache.load("rosters_weekly", wanted), players)
+    pbp_ids = (
+        cache.scan("pbp", wanted)
+        .filter(pl.col("play_type").is_in(["pass", "run"]))
+        .select("season", *PBP_PLAYER_COLUMNS)
+        .collect()
+    )
+    report = id_coverage(snaps, pbp_ids, rosters)
+    shares = [c for c in report.columns if c not in ("season", "snap_rows")]
+    typer.echo("Share of snaps / play-by-play player IDs linked to a known player:")
+    typer.echo(format_table(report, [(c, 4) for c in shares]))
+    fallback = rosters.filter(pl.col("position_source") == "players").height
+    missing = rosters.filter(pl.col("position").is_null()).height
+    typer.echo(
+        f"\nroster player-weeks: {rosters.height:,}; position from crosswalk: {fallback:,}; "
+        f"no position: {missing:,}"
+    )
+    if top:
+        worst = unmatched_snaps(snaps, top)
+        if worst.is_empty():
+            typer.echo("every snap-count player matched")
+        else:
+            typer.echo(f"\nMost-used unmatched snap-count players (top {top}):")
+            typer.echo(format_table(worst, [("offense_snaps", 0), ("defense_snaps", 0)]))

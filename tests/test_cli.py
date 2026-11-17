@@ -50,3 +50,76 @@ def test_datasets_command_lists_registry(config_file: Path) -> None:
     result = runner.invoke(cli.app, ["datasets"])
     assert result.exit_code == 0
     assert "games" in result.output and "2020+" in result.output
+
+
+def test_player_coverage_reports_links_and_unmatched(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import polars as pl
+
+    def snap_counts(season: int) -> pl.DataFrame:
+        return pl.DataFrame(
+            {
+                "game_id": ["g1", "g1"],
+                "season": [season] * 2,
+                "game_type": ["REG"] * 2,
+                "week": [1, 1],
+                "player": ["Cue Bee", "Mystery Man"],
+                "pfr_player_id": ["QbaaAa00", "ZzzzZz00"],
+                "position": ["QB", "G"],
+                "team": ["OAK", "OAK"],
+                "opponent": ["SD", "SD"],
+                "offense_snaps": [60.0, 20.0],
+                "offense_pct": [1.0, 0.33],
+                "defense_snaps": [0.0, 0.0],
+                "defense_pct": [0.0, 0.0],
+                "st_snaps": [0.0, 0.0],
+                "st_pct": [0.0, 0.0],
+            }
+        )
+
+    def rosters_weekly(season: int) -> pl.DataFrame:
+        return pl.DataFrame(
+            {
+                "season": [season],
+                "week": [1],
+                "gsis_id": ["00-1"],
+                "full_name": ["Cue Bee"],
+                "team": ["OAK"],
+                "position": ["QB"],
+                "status": ["ACT"],
+            }
+        )
+
+    def pbp(season: int) -> pl.DataFrame:
+        return pl.DataFrame(
+            {
+                "season": [season] * 2,
+                "play_type": ["pass", "kickoff"],
+                "passer_player_id": ["00-1", None],
+                "rusher_player_id": [None, None],
+                "receiver_player_id": [None, None],
+            },
+            schema_overrides={"rusher_player_id": pl.String, "receiver_player_id": pl.String},
+        )
+
+    def players() -> pl.DataFrame:
+        return pl.DataFrame({"gsis_id": ["00-1"], "pfr_id": ["QbaaAa00"], "position_group": ["QB"]})
+
+    fake = {
+        "snap_counts": DatasetSpec("snap_counts", "", first_season=2012, fetch_season=snap_counts),
+        "rosters_weekly": DatasetSpec(
+            "rosters_weekly", "", first_season=2002, fetch_season=rosters_weekly
+        ),
+        "pbp": DatasetSpec("pbp", "", first_season=1999, fetch_season=pbp),
+        "players": DatasetSpec("players", "", fetch_all=players),
+    }
+    monkeypatch.setattr("nflsim.data.cache.DATASETS", fake)
+    cfg = tmp_path / "cfg.toml"
+    cfg.write_text(f"[data]\ncache_dir = '{(tmp_path / 'data').as_posix()}'\n")
+
+    result = runner.invoke(cli.app, ["player-coverage", "--seasons", "2019", "--config", str(cfg)])
+    assert result.exit_code == 0, result.output
+    assert "0.7500" in result.output  # 60 of 80 offensive snaps matched
+    assert "Mystery Man" in result.output
+    assert "position from crosswalk: 0" in result.output
