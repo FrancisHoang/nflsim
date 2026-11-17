@@ -9,7 +9,7 @@ import pytest
 from nflsim.config import ModelConfig, RatingsConfig
 from nflsim.data import normalize_teams
 from nflsim.model import build_games, fit_points_model, league_points_as_of, team_game_stats
-from nflsim.model.points import PointsModel
+from nflsim.model.points import PointsModel, design_matrices
 from tests.test_ratings import pbp, play, season_rows
 
 RCFG = RatingsConfig(min_wp=0.0, max_wp=1.0)
@@ -221,3 +221,34 @@ def test_direct_margin_keeps_total_and_flips_with_sides() -> None:
     assert np.allclose(dh + da, bh + ba)  # total from the points model
     assert np.allclose(dh - da, [10.0, -10.0, 0.0, 10.0])  # 50 * (h - a) at neutral site
     assert dh[0] - da[0] == pytest.approx(-(dh[1] - da[1]))
+
+
+def test_build_games_adds_player_features_with_league_average_fallback() -> None:
+    kinds = ["pass", "run"] * 5
+    rows = [play(2019, 1, "LV", "KC", 0.1, play_type=k) for k in kinds]
+    rows += [play(2019, 1, "KC", "LV", 0.3, play_type=k) for k in kinds]
+    games = team_game_stats(pbp(rows), RCFG)
+    sched = schedule([(2019, 1, "OAK", "KC", 17, 24), (2019, 2, "KC", "OAK", 28, 10)])
+    features = pl.DataFrame(
+        {
+            "season": [2019],
+            "week": [2],
+            "team": ["KC"],
+            "off_qb": [0.05],
+            "off_rush": [0.01],
+            "off_recv": [0.02],
+            "player_proj_missing": [0],
+        }
+    )
+    built = build_games(sched, games, RCFG, features).filter(pl.col("week") == 2)
+    out = built.row(0, named=True)
+    assert out["h_off_qb"] == pytest.approx(0.05)
+    assert out["a_off_qb"] == 0.0  # LV has no row: league average
+    assert out["a_player_proj_missing"] == 3
+    assert out["has_ratings"]
+
+    x_home, x_away = design_matrices(built, ["off_qb"])
+    assert x_home[0, 0] == pytest.approx(0.05)
+    assert x_away[0, 0] == 0.0
+    with pytest.raises(ValueError, match="player features"):
+        design_matrices(build_games(sched, games, RCFG), ["off_qb"])

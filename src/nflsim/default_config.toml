@@ -35,6 +35,10 @@ carryover = 0.5
 # Features (each a deviation from league average as of the game):
 #   off_epa, off_success, off_pace: the scoring team's offense
 #   def_epa, def_success, def_pace: the opponent's defense (EPA/success allowed) and pace
+#   off_qb, off_rush, off_recv: the scoring team's offense built from player ratings
+#     (projected usage x player EPA rating minus league role average; [player_ratings]).
+#     Backtest 2021-2024 (2026-11-17): adding them leaves Brier unchanged (+0.0001) and
+#     replacing off_epa/off_success with them is worse (+0.0022), so they are off by default.
 features = ["off_epa", "def_epa", "off_success", "def_success", "off_pace", "def_pace"]
 # Number of seasons before the predicted season used to fit the coefficients.
 train_seasons = 5
