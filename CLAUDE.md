@@ -49,7 +49,7 @@ Monte Carlo simulator for single NFL games. Given two teams and a week, it simul
 ## Roadmap
 0. ✅ Scaffold: repo, pyproject, CI, data loaders with parquet caching, README
 1. ✅ Baseline game sim: team offense/defense ratings (EPA/play, success rate, pace), shrinkage, score distributions, backtest harness
-2. Player-level ratings by position, snap-weighted, with shrinkage
+2. ✅ Player-level ratings by position, usage-weighted, with shrinkage (opt-in features; no backtest gain yet)
 3. Injuries: weekly reports and practice participation, availability sampling, depth chart replacement
 4. Matchups: pass rush vs. pass block, WR/TE vs. CB/S, run game vs. run defense, QB vs. pressure/scheme
 5. Tendencies and game script: play-calling, pace, 4th down, red zone; engine moves from game-level to drive-level to play-level
@@ -59,7 +59,7 @@ Monte Carlo simulator for single NFL games. Given two teams and a week, it simul
 Mark phases done here as they merge.
 
 ## Current status
-Phase 0 and Phase 1 done and merged to `main` (Phase 1 via PR #1), CI green on Python 3.11 and 3.12.
+Phases 0-2 done and merged to `main` (Phase 1 via PR #1, Phase 2 via PRs #4-#6), CI green on Python 3.11 and 3.12. Phase 2 player features did not beat the Phase 1 baseline, so the baseline below is still the benchmark.
 
 Phase 1 baseline (the benchmark; `nflsim backtest --seasons 2021-2024 --n 10000 --seed 42`, 1,139 games):
 
