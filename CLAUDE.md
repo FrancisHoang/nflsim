@@ -17,6 +17,7 @@ Monte Carlo simulator for single NFL games. Given two teams and a week, it simul
 - Fetch data: `uv run nflsim fetch --seasons 2016-2025 --datasets pbp,schedules`
 - List datasets: `uv run nflsim datasets`
 - Backtest: `uv run nflsim backtest --seasons 2021-2024 --n 10000 --seed 42` (`--features off_epa,def_epa` to compare feature sets, `--output preds.parquet` to save per-game predictions)
+- Tune shrinkage: `uv run nflsim tune --seasons 2021-2023 --holdout 2024 --n 4000 --seed 42` (grid in config `[tuning]`; `--config` to override)
 - Simulate: `uv run nflsim simulate --home KC --away BUF --season 2025 --week 12 --n 10000 --seed 42` (`--neutral` for neutral sites)
 
 (Update this list as commands are added.)
@@ -66,7 +67,9 @@ Phase 1 baseline (the benchmark; `nflsim backtest --seasons 2021-2024 --n 10000 
 | Vegas close | 9.79 | 10.29 | 0.2112 | 0.6115 |
 | Home only | 11.00 | 10.90 | 0.2474 | 0.6893 |
 
-Known issues: predictions are under-confident (predicted margin SD 4.3 vs. Vegas 6.0); shrinkage strengths in `[ratings]` are untuned guesses; feature sets tie (defensive success rate unstable). Next: shrinkage tuning pass (tune against 2021-2023 backtest seasons, keep 2024 as a holdout), then propose the Phase 2 plan.
+Known issues: predictions are under-confident (actual margin vs. predicted margin slope 1.20, Vegas 1.03; predicted margin SD 4.3 vs. Vegas 6.0). Feature sets tie (defensive success rate unstable).
+
+Shrinkage tuning (2026-11-16, `nflsim tune`): best grid settings (EPA prior 800 plays, carryover 0.7, pace prior 16 games, no garbage-time filter) improved tuning-season Brier 0.2282 -> 0.2240 but NOT the 2024 holdout (+0.0006, 95% CI [-0.0035, +0.0048]). Defaults left unchanged. Shrinkage is not the cause of the under-confidence (best settings: margin SD 4.5).
 
 Data notes:
 - Default fetch range is 2016 onward (config `default_first_season`).
