@@ -14,8 +14,9 @@ Monte Carlo simulator for single NFL games. Given two teams and a week, it simul
 - Test: `uv run pytest`
 - Lint/format: `uv run ruff check . && uv run ruff format .` (use `--no-cache` before pushing; a stale cache once hid CI failures)
 - Types: `uv run mypy` (strict; checks `src` and `tests` via pyproject)
-- Fetch data: `uv run nflsim fetch --seasons 2016-2025 --datasets pbp,schedules`
+- Fetch data: `uv run nflsim fetch --seasons 2016-2025 --datasets pbp,schedules,rosters_weekly,snap_counts,players`
 - List datasets: `uv run nflsim datasets`
+- Player ID coverage: `uv run nflsim player-coverage --seasons 2016-2025` (share of snaps and pbp player IDs that link to a known player; lists unmatched players)
 - Backtest: `uv run nflsim backtest --seasons 2021-2024 --n 10000 --seed 42` (`--features off_epa,def_epa` to compare feature sets, `--output preds.parquet` to save per-game predictions, `--margin-fit direct` to use the direct margin fit)
 - Tune shrinkage: `uv run nflsim tune --seasons 2021-2023 --holdout 2024 --n 4000 --seed 42` (grid in config `[tuning]`; `--config` to override)
 - Simulate: `uv run nflsim simulate --home KC --away BUF --season 2025 --week 12 --n 10000 --seed 42` (`--neutral` for neutral sites)
@@ -77,4 +78,6 @@ Data notes:
 - Default fetch range is 2016 onward (config `default_first_season`).
 - In `schedules`, `spread_line` is positive when the HOME team is favored, and `result` is home score minus away score.
 - `DataCache.load` returns whole seasons; leakage filtering (stats through W-1) is each model's job. Use `DataCache.scan` for pbp (lazy, reads only needed columns).
-- Schedules keep historical team codes (OAK, SD, STL); pbp uses current ones (LV, LAC, LA). Normalize with `nflsim.data.normalize_teams` before joining.
+- Schedules keep historical team codes (OAK, SD, STL); pbp uses current ones (LV, LAC, LA). Normalize with `nflsim.data.normalize_teams` before joining. Snap counts and weekly rosters also use historical codes.
+- Players are keyed by GSIS ID (`00-00xxxxx`): pbp `passer/rusher/receiver_player_id` and `rosters_weekly.gsis_id`. Snap counts use PFR IDs; map them with `nflsim.data.player_snaps` (via the one-to-one `players` crosswalk; `rosters_weekly.pfr_id` adds nothing). Coverage 2016-2025 is 99.9%+ of snaps and 100% of pbp IDs; unmatched rows are kept with `id_matched = False`.
+- Take positions from `rosters_weekly` per week (`nflsim.data.roster_weeks`), not from `players`: about 370 players change position over time. Some non-QBs throw passes (trick plays), so rate by position, not by pbp role.
