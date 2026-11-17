@@ -49,3 +49,13 @@ overtime_points = 3
 [backtest]
 # Equal-width bins of predicted home win probability in the calibration table.
 calibration_bins = 10
+
+[tuning]
+# Candidate values for `nflsim tune`, a grid search over the [ratings] shrinkage settings.
+# Every combination is backtested; the current [ratings] values are always included.
+prior_plays_epa = [50.0, 100.0, 200.0, 300.0, 500.0, 800.0]
+prior_plays_success = [50.0, 100.0, 200.0, 400.0]
+carryover = [0.3, 0.5, 0.7, 0.9]
+prior_games_pace = [2.0, 4.0, 8.0]
+# [min_wp, max_wp] garbage-time windows.
+wp_windows = [[0.05, 0.95], [0.0, 1.0], [0.1, 0.9]]

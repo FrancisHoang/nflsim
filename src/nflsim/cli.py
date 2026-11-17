@@ -12,6 +12,7 @@ from nflsim.backtest import calibration, format_table, summarize, walk_forward
 from nflsim.config import load_settings
 from nflsim.data import DATASETS, DataCache, parse_seasons
 from nflsim.pipeline import load_games, matchup_row, predict_matchup
+from nflsim.tuning import current_params, evaluate, evaluate_holdout, grid
 
 app = typer.Typer(help="Monte Carlo NFL game simulator.", no_args_is_help=True)
 
@@ -160,6 +161,71 @@ def simulate(
         typer.echo(f"  {label:<11}" + "  ".join(f"{values[q]:>5.0f}" for q in qs))
     for flag in r.flags:
         typer.echo(f"  flag: {flag}")
+
+
+@app.command()
+def tune(
+    seasons: Annotated[
+        str, typer.Option(help="Seasons the settings are chosen on, e.g. '2021-2023'.")
+    ] = "2021-2023",
+    holdout: Annotated[
+        str | None,
+        typer.Option(help="Held-out season(s) to confirm the winner on, e.g. '2024'."),
+    ] = "2024",
+    n: Annotated[int, typer.Option(help="Simulations per game.", min=1)] = 4_000,
+    seed: Annotated[int, typer.Option(help="RNG seed shared by every combination.")] = 42,
+    top: Annotated[int, typer.Option(help="Rows of the ranking to print.", min=1)] = 10,
+    output: Annotated[
+        Path | None, typer.Option(help="Write the full ranking to this parquet file.")
+    ] = None,
+    config: ConfigOption = None,
+) -> None:
+    """Grid-search the [ratings] shrinkage settings with the walk-forward backtest."""
+    settings = load_settings(config)
+    tune_seasons = parse_seasons(seasons)
+    holdout_seasons = parse_seasons(holdout) if holdout else []
+    overlap = sorted(set(tune_seasons) & set(holdout_seasons))
+    if overlap:
+        raise typer.BadParameter(f"holdout season(s) {overlap} are also tuning seasons")
+
+    cache = DataCache(settings.data)
+    last = max(tune_seasons + holdout_seasons)
+    all_seasons = list(range(settings.data.default_first_season, last + 1))
+    pbp = cache.scan("pbp", all_seasons)
+    schedules = cache.load("schedules", all_seasons)
+
+    combos = grid(settings)
+    baseline = current_params(settings.ratings)
+    typer.echo(f"{len(combos)} combinations on {seasons}, {n:,} simulations per game, seed {seed}")
+
+    def progress(i: int, total: int) -> None:
+        if i % 50 == 0 or i == total:
+            typer.echo(f"  {i}/{total}")
+
+    ranking = evaluate(pbp, schedules, settings, combos, tune_seasons, n, seed, progress)
+    ranking = ranking.with_row_index("rank", offset=1)
+    is_base = pl.all_horizontal([pl.col(k) == v for k, v in baseline.items()])
+    base_row = ranking.filter(is_base)
+    digits = [("brier", 4), ("log_loss", 4), ("margin_mae", 2), ("total_mae", 2)]
+    digits += [(f, 2) for f in ("carryover", "min_wp", "max_wp")]
+    digits += [(f, 0) for f in ("prior_plays_epa", "prior_plays_success", "prior_games_pace")]
+    typer.echo(f"\nTop {top} by Brier on {seasons}:")
+    typer.echo(format_table(ranking.head(top), digits))
+    typer.echo("\nCurrent settings:")
+    typer.echo(format_table(base_row, digits))
+
+    if output is not None:
+        output.parent.mkdir(parents=True, exist_ok=True)
+        ranking.write_parquet(output)
+        typer.echo(f"\nranking written to {output}")
+
+    if holdout_seasons:
+        best = {k: ranking.row(0, named=True)[k] for k in baseline}
+        result = evaluate_holdout(
+            pbp, schedules, settings, {"current": baseline, "best": best}, holdout_seasons, n, seed
+        )
+        typer.echo(f"\nHoldout {holdout} (not used to choose settings):")
+        typer.echo(format_table(result, [*digits, ("pick_rate", 3)]))
 
 
 if __name__ == "__main__":
