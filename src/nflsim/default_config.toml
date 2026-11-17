@@ -47,6 +47,25 @@ min_expected_points = 3.0
 #             model leaves out effects between the two sides, which narrows its margins.
 margin_fit = "points"
 
+[player_ratings]
+# Player EPA ratings by role (Phase 2): dropback (QBs: passes, sacks, scrambles),
+# carry (designed runs) and target. rating = (sum + k * prior) / (plays + k), where
+# prior = position average in the role + d, and
+#   d = carryover * last-season excess EPA / (last-season plays + k)
+#     + unknown_deviation * k / (last-season plays + k).
+# Chosen with `nflsim player-eval` on 2018-2022 and checked on 2023-2025 (2026-11-17).
+prior_plays = { dropback = 200.0, carry = 300.0, target = 200.0 }
+carryover = 0.7
+# New players (no plays in the role last season) relative to the position average.
+# Measured on 2018-2022: QBs -0.11 EPA/dropback, receivers -0.04/target, rushers 0.00.
+unknown_deviation = { dropback = -0.10, carry = 0.0, target = -0.02 }
+# Projected usage: exponentially weighted share of the team's role plays over recent
+# rostered games, half-life in games. Short half-lives win: whoever played QB last game
+# is the best guess without injury reports (Phase 3).
+usage_half_life_games = { dropback = 0.25, carry = 1.0, target = 2.0 }
+# Weekly-roster statuses that rule a player out (known days before kickoff).
+unavailable_statuses = ["RES", "PUP", "SUS", "CUT", "RET", "NWT"]
+
 [sim]
 # Points added to the winner when a simulated game ends tied (overtime, usually a field goal).
 # The overtime winner is drawn with probability proportional to each team's expected points.

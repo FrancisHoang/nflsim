@@ -85,6 +85,61 @@ class ModelConfig(BaseModel):
         return self
 
 
+PlayerRole = Literal["dropback", "carry", "target"]
+
+
+class PlayerRatingsConfig(BaseModel):
+    """Player EPA ratings by role and projected usage (Phase 2).
+
+    Roles: ``dropback`` (EPA per dropback, incl. sacks and scrambles; QBs only),
+    ``carry`` (EPA per designed run) and ``target`` (EPA per target). Each rating is
+    ``(sum + k * prior) / (plays + k)``, where the prior is the position group's league
+    average plus ``d`` and
+
+        d = carryover * prev_excess / (prev_plays + k) + unknown_deviation * k / (prev_plays + k)
+
+    ``prev_excess`` is last season's EPA above the position average. A player with no
+    plays in the role last season starts at ``position average + unknown_deviation``.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    # Prior strength k, in plays of the role.
+    prior_plays: dict[PlayerRole, float] = {"dropback": 200.0, "carry": 300.0, "target": 200.0}
+    # Share of last season's (shrunk) deviation from position average carried over.
+    carryover: float = Field(default=0.7, ge=0, le=1)
+    # EPA per play of a player with no plays in the role last season, relative to the
+    # position average (new players are usually below it).
+    unknown_deviation: dict[PlayerRole, float] = {
+        "dropback": -0.10,
+        "carry": 0.0,
+        "target": -0.02,
+    }
+    # Projected usage: exponentially weighted share of the team's role plays over the
+    # player's recent rostered games, with this half-life in games (per role).
+    usage_half_life_games: dict[PlayerRole, float] = {
+        "dropback": 0.25,
+        "carry": 1.0,
+        "target": 2.0,
+    }
+    # Weekly roster statuses that mean the player cannot play that week. These are
+    # known days before kickoff (injured reserve, PUP, suspension, released, retired).
+    # Game-day inactives are Phase 3 (injuries).
+    unavailable_statuses: tuple[str, ...] = ("RES", "PUP", "SUS", "CUT", "RET", "NWT")
+
+    @model_validator(mode="after")
+    def _all_roles(self) -> Self:
+        roles = {"dropback", "carry", "target"}
+        for name in ("prior_plays", "unknown_deviation", "usage_half_life_games"):
+            missing = roles - set(getattr(self, name))
+            if missing:
+                raise ValueError(f"player_ratings.{name} is missing roles: {sorted(missing)}")
+        for name in ("prior_plays", "usage_half_life_games"):
+            if any(v <= 0 for v in getattr(self, name).values()):
+                raise ValueError(f"player_ratings.{name} must be positive")
+        return self
+
+
 class SimConfig(BaseModel):
     """Monte Carlo score simulation."""
 
@@ -131,6 +186,7 @@ class Settings(BaseModel):
     data: DataConfig = DataConfig()
     ratings: RatingsConfig = RatingsConfig()
     model: ModelConfig = ModelConfig()
+    player_ratings: PlayerRatingsConfig = PlayerRatingsConfig()
     sim: SimConfig = SimConfig()
     backtest: BacktestConfig = BacktestConfig()
     tuning: TuningConfig = TuningConfig()
