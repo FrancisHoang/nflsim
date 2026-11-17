@@ -23,7 +23,7 @@ import numpy as np
 import numpy.typing as npt
 import polars as pl
 
-from nflsim.config import ModelConfig, RatingsConfig
+from nflsim.config import PLAYER_FEATURES, ModelConfig, RatingsConfig
 from nflsim.data.teams import normalize_teams
 from nflsim.model.ratings import RATING_COLUMNS, ratings_as_of
 
@@ -83,14 +83,20 @@ def league_points_as_of(schedules: pl.DataFrame) -> pl.DataFrame:
 
 
 def build_games(
-    schedules: pl.DataFrame, team_games: pl.DataFrame, ratings_config: RatingsConfig
+    schedules: pl.DataFrame,
+    team_games: pl.DataFrame,
+    ratings_config: RatingsConfig,
+    player_features: pl.DataFrame | None = None,
 ) -> pl.DataFrame:
     """One row per scheduled game with both teams' pre-game ratings attached.
 
     Columns: game identifiers, scores (null if unplayed), Vegas spread/total/moneylines,
     ``home_sign``, ``league_ppg``, ``h_*``/``a_*`` ratings and prior flags, and
     ``has_ratings`` (False when any rating is missing, e.g. week 1 of the first cached
-    season).
+    season). ``player_features`` (from ``team_player_features``, keyed by season, week,
+    team) adds ``h_*``/``a_*`` player-based offense columns and ``player_proj_missing``.
+    A team with no row gets 0 (league average) for each and every role counted as
+    missing; this does not affect ``has_ratings``.
     """
     sched = normalize_teams(schedules, ["home_team", "away_team"]).cast(
         {"season": pl.Int32, "week": pl.Int32}
@@ -104,6 +110,17 @@ def build_games(
     ratings = ratings_as_of(team_games, targets, ratings_config).select(
         "season", "week", "team", *_RATING_FIELDS, "games_played", "prior_source"
     )
+    if player_features is not None:
+        ratings = ratings.join(
+            player_features.select(
+                "season", "week", "team", *PLAYER_FEATURES, "player_proj_missing"
+            ).cast({"season": pl.Int32, "week": pl.Int32}),
+            on=["season", "week", "team"],
+            how="left",
+        ).with_columns(
+            pl.col(PLAYER_FEATURES).fill_null(0.0),
+            pl.col("player_proj_missing").fill_null(len(PLAYER_FEATURES)),
+        )
 
     def side(prefix: str) -> pl.DataFrame:
         return ratings.rename(
@@ -159,6 +176,8 @@ def _features(offense: str, defense: str) -> dict[str, pl.Expr]:
         "def_epa": dev(defense, "def_epa", "epa"),
         "def_success": dev(defense, "def_success", "success"),
         "def_pace": dev(defense, "pace", "pace"),
+        # Player-based ratings are already deviations from the league role average.
+        **{f: pl.col(f"{offense}{f}") for f in PLAYER_FEATURES},
     }
 
 
@@ -170,6 +189,9 @@ def design_matrices(games: pl.DataFrame, features: Sequence[str]) -> tuple[Float
     if not features:
         empty = np.zeros((games.height, 0))
         return empty, empty.copy()
+    missing = [f for f in features if f in PLAYER_FEATURES and f"h_{f}" not in games.columns]
+    if missing:
+        raise ValueError(f"player features {missing} need build_games(player_features=...)")
     out = []
     for offense, defense in (("h_", "a_"), ("a_", "h_")):
         exprs = _features(offense, defense)

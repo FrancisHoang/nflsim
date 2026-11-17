@@ -55,7 +55,19 @@ class DataConfig(BaseModel):
     current_season_max_age_hours: float = Field(default=12.0, gt=0)
 
 
-PointsFeature = Literal["off_epa", "def_epa", "off_success", "def_success", "off_pace", "def_pace"]
+PointsFeature = Literal[
+    "off_epa",
+    "def_epa",
+    "off_success",
+    "def_success",
+    "off_pace",
+    "def_pace",
+    "off_qb",
+    "off_rush",
+    "off_recv",
+]
+# Features built from player ratings (Phase 2) rather than team ratings.
+PLAYER_FEATURES: tuple[PointsFeature, ...] = ("off_qb", "off_rush", "off_recv")
 
 
 class ModelConfig(BaseModel):

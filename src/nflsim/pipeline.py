@@ -7,9 +7,9 @@ from dataclasses import dataclass
 import numpy as np
 import polars as pl
 
-from nflsim.config import Settings
-from nflsim.data import DataCache
-from nflsim.data.teams import TEAM_ALIASES
+from nflsim.config import PLAYER_FEATURES, Settings
+from nflsim.data import DataCache, roster_weeks
+from nflsim.data.teams import TEAM_ALIASES, normalize_teams
 from nflsim.model import (
     PointsModel,
     build_games,
@@ -17,6 +17,7 @@ from nflsim.model import (
     simulate_scores,
     team_game_stats,
 )
+from nflsim.model.players import player_game_stats, team_player_features
 
 MATCHUP_ID = "SIM"
 
@@ -34,7 +35,34 @@ def load_games(
     if extra is not None:
         schedules = pl.concat([schedules, extra], how="diagonal_relaxed")
     team_games = team_game_stats(pbp, settings.ratings)
-    return build_games(schedules, team_games, settings.ratings)
+    players = None
+    if any(f in PLAYER_FEATURES for f in settings.model.features):
+        players = load_player_features(cache, settings, seasons, schedules)
+    return build_games(schedules, team_games, settings.ratings, players)
+
+
+def load_player_features(
+    cache: DataCache, settings: Settings, seasons: list[int], schedules: pl.DataFrame
+) -> pl.DataFrame:
+    """Player-based team offense ratings (``team_player_features``) for each scheduled team."""
+    rosters = roster_weeks(cache.load("rosters_weekly", seasons), cache.load("players"))
+    player_games, role_totals = player_game_stats(
+        cache.scan("pbp", seasons), rosters, settings.ratings
+    )
+    sched = normalize_teams(schedules, ["home_team", "away_team"])
+    targets = pl.concat(
+        [
+            sched.select(
+                pl.col("season").cast(pl.Int32),
+                pl.col("week").cast(pl.Int32),
+                pl.col(c).alias("team"),
+            )
+            for c in ("home_team", "away_team")
+        ]
+    )
+    return team_player_features(
+        player_games, role_totals, rosters, targets, settings.player_ratings
+    )
 
 
 def matchup_row(season: int, week: int, home: str, away: str, neutral: bool) -> pl.DataFrame:
@@ -125,6 +153,12 @@ def predict_matchup(games: pl.DataFrame, settings: Settings, n: int, seed: int) 
             flags.append(f"{name}: previous season not cached; prior is league average")
         if info[f"{prefix}games_played"] == 0:
             flags.append(f"{name}: no games yet this season; rating is the prior only")
+        missing = info.get(f"{prefix}player_proj_missing")
+        if missing:
+            flags.append(
+                f"{name}: no usage projection for {missing} player role(s) "
+                "(no roster or no history); those use the league average"
+            )
 
     model = fit_points_model(train, settings.model)
     mu_home, mu_away = model.expected_points(row)

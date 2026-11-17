@@ -12,7 +12,9 @@ from nflsim.model.players import (
     player_game_stats,
     player_ratings_as_of,
     projected_usage,
+    role_means_as_of,
     role_plays,
+    team_player_features,
     usage_history,
 )
 from nflsim.player_eval import evaluate_ratings, evaluate_usage
@@ -335,3 +337,64 @@ def test_config_requires_every_role() -> None:
         PlayerRatingsConfig(prior_plays={"dropback": 100.0, "carry": 100.0})
     with pytest.raises(ValidationError, match="must be positive"):
         PlayerRatingsConfig(usage_half_life_games={"dropback": 0.0, "carry": 1.0, "target": 1.0})
+
+
+def two_team_inputs() -> tuple[pl.DataFrame, pl.DataFrame, pl.DataFrame]:
+    """KC (QB1 -> WR1, +0.1 per pass) and BUF (QB2 -> WR2, -0.1) in weeks 1-2. No runs.
+
+    Week 3 has absurd EPA that must not reach week-3 features.
+    """
+    rows = []
+    for week in (1, 2, 3):
+        epa = 9.0 if week == 3 else 0.1
+        game = f"g{week}"
+        rows += [completion("QB1", "WR1", epa, week=week, game_id=game)] * 10
+        rows += [completion("QB2", "WR2", -epa, week=week, game_id=game, posteam="BUF")] * 10
+    roster_rows = []
+    for week in (1, 2, 3):
+        roster_rows += [
+            (2020, week, "QB1", "KC", "QB", "ACT"),
+            (2020, week, "WR1", "KC", "WR", "ACT"),
+            (2020, week, "QB2", "BUF", "QB", "ACT"),
+            (2020, week, "WR2", "BUF", "WR", "ACT"),
+        ]
+    roster = rosters(roster_rows)
+    players, teams = player_game_stats(pbp(rows), roster, RCFG)
+    return players, teams, roster
+
+
+def team_week(season: int, week: int, teams: list[str]) -> pl.DataFrame:
+    return pl.DataFrame(
+        {"season": [season] * len(teams), "week": [week] * len(teams), "team": teams},
+        schema_overrides={"season": pl.Int32, "week": pl.Int32},
+    )
+
+
+def test_role_means_pool_prior_season_and_exclude_target_week() -> None:
+    players, _, _ = two_team_inputs()
+    means = role_means_as_of(players, team_week(2020, 3, ["KC"]))
+    by_role = dict(zip(means["role"], means["role_mean"], strict=True))
+    assert by_role["dropback"] == pytest.approx(0.0)  # +0.1 and -0.1 in equal numbers
+    assert by_role["carry"] is None  # no carries anywhere
+
+
+def test_team_player_features_weight_ratings_by_projected_usage() -> None:
+    players, teams, roster = two_team_inputs()
+    cfg = CFG.model_copy(
+        update={"unknown_deviation": {"dropback": 0.0, "carry": 0.0, "target": 0.0}}
+    )
+    out = team_player_features(
+        players, teams, roster, team_week(2020, 3, ["KC", "BUF", "NYJ"]), cfg
+    )
+    rows = {r["team"]: r for r in out.iter_rows(named=True)}
+    # Each QB/WR is his team's only passer/target; group and league means are 0, no
+    # prior season: rating = (20 plays * +-0.1 + 100 * 0) / (20 + 100).
+    assert rows["KC"]["off_qb"] == pytest.approx(2.0 / 120)
+    assert rows["KC"]["off_recv"] == pytest.approx(2.0 / 120)
+    assert rows["BUF"]["off_qb"] == pytest.approx(-2.0 / 120)
+    # No team has run the ball: no carry projection, league average, flagged.
+    assert rows["KC"]["off_rush"] == 0.0
+    assert rows["KC"]["player_proj_missing"] == 1
+    # A team with nobody on the roster gets the league average in every role.
+    assert rows["NYJ"]["off_qb"] == 0.0
+    assert rows["NYJ"]["player_proj_missing"] == 3

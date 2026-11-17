@@ -386,3 +386,116 @@ def projected_usage(
         .select("season", "week", "team", "gsis_id", "role", "share", "raw_share", "has_history")
         .sort("season", "week", "team", "role", "gsis_id")
     )
+
+
+# Points-model feature name for each role's team rating.
+ROLE_FEATURES: dict[PlayerRole, str] = {
+    "dropback": "off_qb",
+    "carry": "off_rush",
+    "target": "off_recv",
+}
+TEAM_PLAYER_COLUMNS = [*ROLE_FEATURES.values(), "player_proj_missing"]
+
+
+def role_means_as_of(player_games: pl.DataFrame, keys: pl.DataFrame) -> pl.DataFrame:
+    """League EPA per play in each role (all positions pooled) for each (season, week).
+
+    Pools last season with this season through week W-1, like the group averages in
+    ``player_ratings_as_of``. Returns ``season, week, role, role_mean`` (null when there
+    is no data at all).
+    """
+    weekly = (
+        player_games.group_by("season", "week", "role")
+        .agg(pl.col("n").sum(), pl.col("epa").sum())
+        .sort("season", "week")
+        .with_columns(pl.col("n", "epa").cum_sum().over("season", "role"))
+        .sort("week")
+    )
+    prev = (
+        player_games.group_by("season", "role")
+        .agg(pl.col("n").sum().alias("p_n"), pl.col("epa").sum().alias("p_epa"))
+        .with_columns(pl.col("season") + 1)
+    )
+    frame = (
+        keys.select("season", "week")
+        .unique()
+        .join(pl.DataFrame({"role": list(ROLES)}), how="cross")
+        .sort("week")
+        .join_asof(
+            weekly,
+            on="week",
+            by=["season", "role"],
+            strategy="backward",
+            allow_exact_matches=False,
+            check_sortedness=False,
+        )
+        .join(prev, on=["season", "role"], how="left")
+        .with_columns(pl.col("n", "epa", "p_n", "p_epa").fill_null(0.0))
+    )
+    total_n = pl.col("n") + pl.col("p_n")
+    return frame.select(
+        "season",
+        "week",
+        "role",
+        pl.when(total_n > 0).then((pl.col("epa") + pl.col("p_epa")) / total_n).alias("role_mean"),
+    )
+
+
+def team_player_features(
+    player_games: pl.DataFrame,
+    team_games: pl.DataFrame,
+    rosters: pl.DataFrame,
+    targets: pl.DataFrame,
+    config: PlayerRatingsConfig,
+) -> pl.DataFrame:
+    """Team offense ratings built from players, for each (season, week, team) in ``targets``.
+
+    For each role, ``sum(projected share * (player rating - league role average))``: the
+    usage-weighted EPA per role play the team's players are expected to add over an
+    average player. Everything uses games before the target week only. When no rostered
+    player has usage history in a role (shares null), the feature is 0 (league average)
+    and counted in ``player_proj_missing`` (number of roles without a projection).
+
+    Returns ``season, week, team`` plus ``TEAM_PLAYER_COLUMNS``.
+    """
+    targets = targets.select("season", "week", "team").unique()
+    history = usage_history(player_games, team_games, rosters, config)
+    usage = projected_usage(history, rosters, targets, config)
+    positions = rosters.select("season", "week", "gsis_id", "position").unique(
+        ["season", "week", "gsis_id"]
+    )
+    usage = usage.join(positions, on=["season", "week", "gsis_id"], how="left").with_columns(
+        _group(pl.col("role"), pl.col("position")).alias("group")
+    )
+    rated = player_ratings_as_of(player_games, usage, config).select(
+        "season", "week", "gsis_id", "role", "group", "rating"
+    )
+    means = role_means_as_of(player_games, targets)
+    per_role = (
+        usage.join(rated, on=["season", "week", "gsis_id", "role", "group"], how="left")
+        .join(means, on=["season", "week", "role"], how="left")
+        .group_by("season", "week", "team", "role")
+        .agg(
+            (pl.col("share") * (pl.col("rating") - pl.col("role_mean")))
+            .fill_null(0.0)
+            .sum()
+            .alias("value"),
+            pl.col("share").is_null().all().alias("missing"),
+        )
+    )
+    full = (
+        targets.join(pl.DataFrame({"role": list(ROLES)}), how="cross")
+        .join(per_role, on=["season", "week", "team", "role"], how="left")
+        .with_columns(pl.col("value").fill_null(0.0), pl.col("missing").fill_null(True))
+    )
+    wide = full.pivot(on="role", index=["season", "week", "team"], values="value").rename(
+        {role: feature for role, feature in ROLE_FEATURES.items()}
+    )
+    missing = full.group_by("season", "week", "team").agg(
+        pl.col("missing").sum().cast(pl.Int64).alias("player_proj_missing")
+    )
+    return (
+        wide.join(missing, on=["season", "week", "team"], how="left")
+        .select("season", "week", "team", *TEAM_PLAYER_COLUMNS)
+        .sort("season", "week", "team")
+    )
