@@ -179,3 +179,45 @@ def test_build_and_fit_end_to_end_on_fixture() -> None:
     model = fit_points_model(games.vstack(games), ModelConfig(features=("off_epa",)))
     mu_h, mu_a = model.expected_points(games.filter(pl.col("has_ratings")))
     assert np.all(mu_h > mu_a)  # KC (home, better) favored every week
+
+
+def test_direct_margin_matches_points_model_when_points_model_is_true() -> None:
+    truth = {"intercept": 0.0, "home": 1.0, "off_epa": 30.0}
+    games = synthetic_games(40_000, truth)
+    cfg = ModelConfig(features=("off_epa",), margin_fit="direct")
+    model = fit_points_model(games, cfg)
+    assert model.margin_coefs is not None
+    assert model.margin_coefs[0] == pytest.approx(30.0, abs=2.0)
+    assert model.margin_home == pytest.approx(2.0, abs=0.3)  # both sides' home value
+    assert model.dispersion == pytest.approx(6.0, rel=0.15)
+
+
+def test_direct_margin_captures_cross_effects_the_points_model_misses() -> None:
+    # Each team also scores less against a better opposing offense (fewer possessions);
+    # a per-team points model with only its own offense cannot see that.
+    games = synthetic_games(40_000, {"intercept": 0.0, "home": 1.0, "off_epa": 30.0})
+    games = games.with_columns(
+        home_score=pl.col("home_score") - 10.0 * pl.col("a_off_epa"),
+        away_score=pl.col("away_score") - 10.0 * pl.col("h_off_epa"),
+    )
+    points = fit_points_model(games, ModelConfig(features=("off_epa",)))
+    direct = fit_points_model(games, ModelConfig(features=("off_epa",), margin_fit="direct"))
+    assert points.margin_coefs is None
+    assert points.coefs[0] == pytest.approx(30.0, abs=2.0)  # margin slope stuck at 30
+    assert direct.margin_coefs is not None
+    assert direct.margin_coefs[0] == pytest.approx(40.0, abs=2.0)
+
+
+def test_direct_margin_keeps_total_and_flips_with_sides() -> None:
+    games = synthetic_games(4, {"intercept": 0.0, "home": 0.0}).with_columns(
+        home_sign=pl.lit(0.0),
+        h_off_epa=pl.Series([0.1, -0.1, 0.0, 0.2]),
+        a_off_epa=pl.Series([-0.1, 0.1, 0.0, 0.0]),
+    )
+    base = PointsModel(("off_epa",), 0.0, (30.0,), 1.0, 6.0, 3.0, 0)
+    direct = PointsModel(("off_epa",), 0.0, (30.0,), 1.0, 6.0, 3.0, 0, (50.0,), 2.0)
+    bh, ba = base.expected_points(games)
+    dh, da = direct.expected_points(games)
+    assert np.allclose(dh + da, bh + ba)  # total from the points model
+    assert np.allclose(dh - da, [10.0, -10.0, 0.0, 10.0])  # 50 * (h - a) at neutral site
+    assert dh[0] - da[0] == pytest.approx(-(dh[1] - da[1]))

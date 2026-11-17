@@ -78,6 +78,10 @@ def backtest(
         str | None,
         typer.Option(help="Comma-separated points-model features (default: from config)."),
     ] = None,
+    margin_fit: Annotated[
+        str | None,
+        typer.Option(help="How the margin is fit: 'points' or 'direct' (default: config)."),
+    ] = None,
     output: Annotated[
         Path | None, typer.Option(help="Write per-game predictions to this parquet file.")
     ] = None,
@@ -85,17 +89,20 @@ def backtest(
 ) -> None:
     """Walk-forward backtest: fit on earlier seasons, predict each test season."""
     settings = load_settings(config)
+    overrides: dict[str, object] = {}
     if features is not None:
-        names = tuple(f.strip() for f in features.split(",") if f.strip())
-        model_cfg = settings.model.model_validate(
-            {**settings.model.model_dump(), "features": names}
-        )
+        overrides["features"] = tuple(f.strip() for f in features.split(",") if f.strip())
+    if margin_fit is not None:
+        overrides["margin_fit"] = margin_fit
+    if overrides:
+        model_cfg = settings.model.model_validate({**settings.model.model_dump(), **overrides})
         settings = settings.model_copy(update={"model": model_cfg})
     test_seasons = parse_seasons(seasons)
     games = load_games(DataCache(settings.data), settings, max(test_seasons))
     predictions, fits = walk_forward(games, settings, test_seasons, n, seed)
 
     typer.echo(f"features: {', '.join(settings.model.features) or '(none)'}")
+    typer.echo(f"margin fit: {settings.model.margin_fit}")
     typer.echo(f"simulations per game: {n:,}, seed: {seed}\n")
     for fit in fits:
         m = fit.model
@@ -106,6 +113,9 @@ def backtest(
             f"({m.train_games} games), predicted {fit.test_games}{skipped}; "
             f"home={m.home:+.2f}/team, dispersion={m.dispersion:.1f}, {coefs}"
         )
+        if m.margin_coefs is not None:
+            mc = ", ".join(f"{f}={c:+.2f}" for f, c in zip(m.features, m.margin_coefs, strict=True))
+            typer.echo(f"      margin fit: home={m.margin_home:+.2f}, {mc}")
     fallback = predictions.filter(pl.col("vegas_p_source") == "spread").height
     if fallback:
         typer.echo(f"note: {fallback} game(s) had no moneyline; Vegas win prob from spread")

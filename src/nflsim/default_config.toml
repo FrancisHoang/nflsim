@@ -40,6 +40,12 @@ features = ["off_epa", "def_epa", "off_success", "def_success", "off_pace", "def
 train_seasons = 5
 # Expected points are floored here so the score distribution stays valid.
 min_expected_points = 3.0
+# How the expected margin is fit:
+#   "points": home points model minus away points model (the Phase 1 baseline).
+#   "direct": a separate least-squares fit of actual margin on home-minus-away features
+#             and home field. The points model still sets the expected total. The points
+#             model leaves out effects between the two sides, which narrows its margins.
+margin_fit = "points"
 
 [sim]
 # Points added to the winner when a simulated game ends tied (overtime, usually a field goal).

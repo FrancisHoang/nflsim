@@ -9,12 +9,15 @@ with this season through week W-1), the features are rating deviations from leag
 (see ``ModelConfig``), and ``home_sign`` is +1 for the home team, -1 for the away team and
 0 at neutral sites. Coefficients are fit by least squares; the negative-binomial dispersion
 of actual points around the fit is estimated by the method of moments.
+
+With ``margin_fit = "direct"`` the expected margin comes from its own least-squares fit on
+home-minus-away features instead (see ``PointsModel``); the total is unchanged.
 """
 
 from __future__ import annotations
 
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 import numpy as np
 import numpy.typing as npt
@@ -177,7 +180,13 @@ def design_matrices(games: pl.DataFrame, features: Sequence[str]) -> tuple[Float
 
 @dataclass(frozen=True)
 class PointsModel:
-    """Fitted coefficients plus the score dispersion. ``home`` is per team (margin = 2x)."""
+    """Fitted coefficients plus the score dispersion. ``home`` is per team (margin = 2x).
+
+    If ``margin_coefs`` is set (``margin_fit = "direct"``), the expected margin comes from
+    that separate fit, ``(x_home - x_away) . margin_coefs + margin_home * home_sign``. The
+    expected total still comes from the points model, and each side gets
+    ``(total +/- margin) / 2``.
+    """
 
     features: tuple[str, ...]
     intercept: float
@@ -186,6 +195,8 @@ class PointsModel:
     dispersion: float
     min_expected_points: float
     train_games: int
+    margin_coefs: tuple[float, ...] | None = None
+    margin_home: float = 0.0
 
     def expected_points(self, games: pl.DataFrame) -> tuple[FloatArray, FloatArray]:
         """Expected (home, away) points for each row of a ``build_games`` frame."""
@@ -198,6 +209,11 @@ class PointsModel:
         base = league + self.intercept
         mu_home = base + x_home @ coefs + self.home * sign
         mu_away = base + x_away @ coefs - self.home * sign
+        if self.margin_coefs is not None:
+            margin_coefs = np.asarray(self.margin_coefs, dtype=np.float64)
+            margin = (x_home - x_away) @ margin_coefs + self.margin_home * sign
+            total = mu_home + mu_away
+            mu_home, mu_away = (total + margin) / 2, (total - margin) / 2
         floor = self.min_expected_points
         return np.maximum(mu_home, floor), np.maximum(mu_away, floor)
 
@@ -233,18 +249,30 @@ def fit_points_model(games: pl.DataFrame, config: ModelConfig) -> PointsModel:
     offset = np.concatenate([league, league])
     beta, *_ = np.linalg.lstsq(x, points - offset, rcond=None)
 
-    mu = np.maximum(x @ beta + offset, config.min_expected_points)
-    excess = float(np.mean((points - mu) ** 2) - np.mean(mu))
-    if excess <= 0:
-        raise ValueError("points are not overdispersed; a negative binomial does not apply")
-    dispersion = float(np.mean(mu**2) / excess)
-
-    return PointsModel(
+    model = PointsModel(
         features=features,
         intercept=float(beta[0]),
         coefs=tuple(float(b) for b in beta[1:-1]),
         home=float(beta[-1]),
-        dispersion=dispersion,
+        dispersion=1.0,  # placeholder until the final means are known
         min_expected_points=config.min_expected_points,
         train_games=train.height,
     )
+    if config.margin_fit == "direct":
+        # No intercept: swapping home and away must flip the sign of the margin.
+        xm = np.column_stack([x_home - x_away, sign])
+        margin = (train["home_score"] - train["away_score"]).to_numpy().astype(np.float64)
+        gamma, *_ = np.linalg.lstsq(xm, margin, rcond=None)
+        model = replace(
+            model,
+            margin_coefs=tuple(float(g) for g in gamma[:-1]),
+            margin_home=float(gamma[-1]),
+        )
+
+    # Dispersion of actual points around the model's final expected points.
+    mu_home, mu_away = model.expected_points(train)
+    mu = np.concatenate([mu_home, mu_away])
+    excess = float(np.mean((points - mu) ** 2) - np.mean(mu))
+    if excess <= 0:
+        raise ValueError("points are not overdispersed; a negative binomial does not apply")
+    return replace(model, dispersion=float(np.mean(mu**2) / excess))

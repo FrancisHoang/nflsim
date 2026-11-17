@@ -73,6 +73,10 @@ class ModelConfig(BaseModel):
     )
     train_seasons: int = Field(default=5, ge=1)
     min_expected_points: float = Field(default=3.0, gt=0)
+    # "points": margin = home points model minus away points model (Phase 1 baseline).
+    # "direct": margin fit by its own regression on home-minus-away features; the total
+    # still comes from the points model.
+    margin_fit: Literal["points", "direct"] = "points"
 
     @model_validator(mode="after")
     def _unique_features(self) -> Self:
