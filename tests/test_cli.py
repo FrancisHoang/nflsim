@@ -123,3 +123,49 @@ def test_player_coverage_reports_links_and_unmatched(
     assert "0.7500" in result.output  # 60 of 80 offensive snaps matched
     assert "Mystery Man" in result.output
     assert "position from crosswalk: 0" in result.output
+
+
+def test_player_eval_runs_end_to_end(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import polars as pl
+
+    from tests.test_players_model import completion, pbp, run
+
+    def season_pbp(season: int) -> pl.DataFrame:
+        rows = []
+        for week in (1, 2, 3):
+            gid = f"{season}_{week}"
+            rows += [completion("QB1", "WR1", 0.2, week=week, game_id=gid)] * 5
+            rows += [run("RB1", 0.0, week=week, game_id=gid)] * 3
+        return pbp(rows).with_columns(season=pl.lit(season, dtype=pl.Int32))
+
+    def rosters_weekly(season: int) -> pl.DataFrame:
+        rows = [
+            (season, week, gid, gid, "KC", pos, "ACT")
+            for week in (1, 2, 3)
+            for gid, pos in (("QB1", "QB"), ("WR1", "WR"), ("RB1", "RB"))
+        ]
+        return pl.DataFrame(
+            rows,
+            schema=["season", "week", "gsis_id", "full_name", "team", "position", "status"],
+            orient="row",
+        )
+
+    def players() -> pl.DataFrame:
+        return pl.DataFrame({"gsis_id": ["QB1"], "pfr_id": ["Qb00"], "position_group": ["QB"]})
+
+    fake = {
+        "pbp": DatasetSpec("pbp", "", first_season=1999, fetch_season=season_pbp),
+        "rosters_weekly": DatasetSpec(
+            "rosters_weekly", "", first_season=2002, fetch_season=rosters_weekly
+        ),
+        "players": DatasetSpec("players", "", fetch_all=players),
+    }
+    monkeypatch.setattr("nflsim.data.cache.DATASETS", fake)
+    cfg = tmp_path / "cfg.toml"
+    cfg.write_text(
+        f"[data]\ncache_dir = '{(tmp_path / 'data').as_posix()}'\ndefault_first_season = 2019\n"
+    )
+    result = runner.invoke(cli.app, ["player-eval", "--seasons", "2020", "--config", str(cfg)])
+    assert result.exit_code == 0, result.output
+    assert "dropback" in result.output and "skill_rating" in result.output
+    assert "tv_distance" in result.output

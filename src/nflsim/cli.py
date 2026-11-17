@@ -20,7 +20,9 @@ from nflsim.data import (
     roster_weeks,
     unmatched_snaps,
 )
+from nflsim.model.players import player_game_stats, usage_history
 from nflsim.pipeline import load_games, matchup_row, predict_matchup
+from nflsim.player_eval import evaluate_ratings, evaluate_usage
 from nflsim.tuning import current_params, evaluate, evaluate_holdout, grid
 
 app = typer.Typer(help="Monte Carlo NFL game simulator.", no_args_is_help=True)
@@ -289,3 +291,33 @@ def player_coverage(
         else:
             typer.echo(f"\nMost-used unmatched snap-count players (top {top}):")
             typer.echo(format_table(worst, [("offense_snaps", 0), ("defense_snaps", 0)]))
+
+
+@app.command("player-eval")
+def player_eval(
+    seasons: Annotated[str, typer.Option(help="Test seasons, e.g. '2018-2024'.")] = "2018-2024",
+    config: ConfigOption = None,
+) -> None:
+    """Check player ratings and projected usage against what happened, out of sample."""
+    settings = load_settings(config)
+    test_seasons = parse_seasons(seasons)
+    cache = DataCache(settings.data)
+    all_seasons = list(range(settings.data.default_first_season, max(test_seasons) + 1))
+    rosters = roster_weeks(cache.load("rosters_weekly", all_seasons), cache.load("players"))
+    player_games, team_games = player_game_stats(
+        cache.scan("pbp", all_seasons), rosters, settings.ratings
+    )
+    cfg = settings.player_ratings
+
+    ratings = evaluate_ratings(player_games, test_seasons, cfg)
+    typer.echo(f"Player ratings on {seasons} (predicting each game's EPA/play, weighted by plays)")
+    typer.echo("skill = 1 - MSE / MSE of the position average; higher is better")
+    mse_cols = [c for c in ratings.columns if c.startswith(("mse_", "skill_"))]
+    typer.echo(
+        format_table(ratings, [("plays", 0), ("unknown_share", 3), *[(c, 4) for c in mse_cols]])
+    )
+
+    history = usage_history(player_games, team_games, rosters, cfg)
+    usage = evaluate_usage(history, team_games, rosters, test_seasons, cfg)
+    typer.echo("\nProjected usage vs. actual shares (total-variation distance; 0 = exact)")
+    typer.echo(format_table(usage, [("no_projection", 4), ("tv_distance", 4)]))
