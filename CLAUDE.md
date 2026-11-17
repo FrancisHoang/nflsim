@@ -16,7 +16,7 @@ Monte Carlo simulator for single NFL games. Given two teams and a week, it simul
 - Types: `uv run mypy` (strict; checks `src` and `tests` via pyproject)
 - Fetch data: `uv run nflsim fetch --seasons 2016-2025 --datasets pbp,schedules`
 - List datasets: `uv run nflsim datasets`
-- Backtest: `uv run nflsim backtest --seasons 2021-2024 --n 10000 --seed 42` (`--features off_epa,def_epa` to compare feature sets, `--output preds.parquet` to save per-game predictions)
+- Backtest: `uv run nflsim backtest --seasons 2021-2024 --n 10000 --seed 42` (`--features off_epa,def_epa` to compare feature sets, `--output preds.parquet` to save per-game predictions, `--margin-fit direct` to use the direct margin fit)
 - Tune shrinkage: `uv run nflsim tune --seasons 2021-2023 --holdout 2024 --n 4000 --seed 42` (grid in config `[tuning]`; `--config` to override)
 - Simulate: `uv run nflsim simulate --home KC --away BUF --season 2025 --week 12 --n 10000 --seed 42` (`--neutral` for neutral sites)
 
@@ -67,9 +67,11 @@ Phase 1 baseline (the benchmark; `nflsim backtest --seasons 2021-2024 --n 10000 
 | Vegas close | 9.79 | 10.29 | 0.2112 | 0.6115 |
 | Home only | 11.00 | 10.90 | 0.2474 | 0.6893 |
 
-Known issues: predictions are under-confident (actual margin vs. predicted margin slope 1.20, Vegas 1.03; predicted margin SD 4.3 vs. Vegas 6.0). Feature sets tie (defensive success rate unstable).
+Known issues: predictions are under-confident (actual margin vs. predicted margin slope 1.20, Vegas 1.03; predicted margin SD 4.3 vs. Vegas 6.0). Feature sets tie (defensive success rate unstable). The six rating features overlap heavily, so their coefficients swing from season to season.
 
 Shrinkage tuning (2026-11-16, `nflsim tune`): best grid settings (EPA prior 800 plays, carryover 0.7, pace prior 16 games, no garbage-time filter) improved tuning-season Brier 0.2282 -> 0.2240 but NOT the 2024 holdout (+0.0006, 95% CI [-0.0035, +0.0048]). Defaults left unchanged. Shrinkage is not the cause of the under-confidence (best settings: margin SD 4.5).
+
+Margin fit (2026-11-17, `[model] margin_fit`): the under-confidence is structural, not early-season noise (training on weeks 8+ leaves the slope unchanged; in-sample slope is about 1.30). The per-team points model leaves out effects between the two sides. `margin_fit = "direct"` fits the margin separately on home-minus-away features: slope 1.20 -> 0.94, margin SD 4.3 -> 5.6, but Brier 0.2254 -> 0.2246 (diff -0.0008, 95% CI [-0.0030, +0.0014]), log loss 0.6437 -> 0.6428 (CI [-0.0062, +0.0044]), margin MAE 10.17 -> 10.18. The improvement is not significant (2 of 4 seasons better), so the default stays `"points"`. Calibration is not where the gap to Vegas comes from.
 
 Data notes:
 - Default fetch range is 2016 onward (config `default_first_season`).
