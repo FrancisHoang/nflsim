@@ -76,9 +76,14 @@ PointsFeature = Literal[
     "wind",
     "mkt",
     "opp_mkt",
+    "qb_change",
+    "qb_change_proj",
 ]
 # Features built from player ratings (Phase 2) rather than team ratings.
 PLAYER_FEATURES: tuple[PointsFeature, ...] = ("off_qb", "off_rush", "off_recv")
+# Quarterback change since the games the ratings were built on (opt-in;
+# nflsim.model.qb_change). Need player data like PLAYER_FEATURES.
+QB_CHANGE_FEATURES: tuple[PointsFeature, ...] = ("qb_change", "qb_change_proj")
 # Game context from the schedule (Phase 6).
 CONTEXT_FEATURES: tuple[PointsFeature, ...] = ("rest", "opp_rest", "indoor", "wind")
 # Team strength implied by earlier weeks' closing spreads ([market]; default since 2026-11-18).

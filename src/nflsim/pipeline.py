@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 import numpy as np
 import polars as pl
 
-from nflsim.config import MARKET_FEATURES, PLAYER_FEATURES, Settings
+from nflsim.config import MARKET_FEATURES, PLAYER_FEATURES, QB_CHANGE_FEATURES, Settings
 from nflsim.data import (
     DataCache,
     depth_chart_weeks,
@@ -34,6 +34,7 @@ from nflsim.model.availability import (
     uncertain_players,
 )
 from nflsim.model.players import player_game_stats, rated_usage, team_player_features
+from nflsim.model.qb_change import qb_change_features
 from nflsim.model.stat_lines import (
     expected_stats,
     player_rates_as_of,
@@ -99,7 +100,7 @@ def load_games_with_lineups(
         schedules = pl.concat([schedules, home_roof(extra, schedules)], how="diagonal_relaxed")
     team_games = team_game_stats(pbp, settings.ratings)
     players = lineup = None
-    if any(f in PLAYER_FEATURES for f in settings.model.features):
+    if any(f in (*PLAYER_FEATURES, *QB_CHANGE_FEATURES) for f in settings.model.features):
         players, lineup = load_player_features(cache, settings, seasons, schedules)
     games = build_games(
         schedules, team_games, settings.ratings, players, settings.context, settings.market
@@ -121,16 +122,23 @@ def load_player_features(
         cache.scan("pbp", seasons), rosters, settings.ratings
     )
     targets = schedule_targets(schedules)
+    lineup = None
     if not settings.model.injury_aware:
         features = team_player_features(
             player_games, role_totals, rosters, targets, settings.player_ratings
         )
-        return features, None
-    rated, lineup = load_lineups(
-        cache, settings, seasons, targets, player_games, role_totals, rosters
-    )
-    reports = injury_reports(cache.load("injuries", seasons))
-    return injury_aware_features(targets, rated, lineup, reports), lineup
+    else:
+        rated, lineup = load_lineups(
+            cache, settings, seasons, targets, player_games, role_totals, rosters
+        )
+        reports = injury_reports(cache.load("injuries", seasons))
+        features = injury_aware_features(targets, rated, lineup, reports)
+    if set(settings.model.features) & set(QB_CHANGE_FEATURES):
+        qb = qb_change_features(player_games, schedules, targets, features, settings.player_ratings)
+        features = features.cast({"season": pl.Int32, "week": pl.Int32}).join(
+            qb.drop("qb_base_source"), on=["season", "week", "team"], how="left"
+        )
+    return features, lineup
 
 
 def injury_aware_features(

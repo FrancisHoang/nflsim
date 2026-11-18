@@ -25,6 +25,7 @@ import polars as pl
 
 from nflsim.config import (
     PLAYER_FEATURES,
+    QB_CHANGE_FEATURES,
     ContextConfig,
     MarketConfig,
     ModelConfig,
@@ -127,7 +128,11 @@ def build_games(
         "season", "week", "team", *_RATING_FIELDS, "games_played", "prior_source"
     )
     if player_features is not None:
-        extra = [c for c in ("injury_report",) if c in player_features.columns]
+        extra = [
+            c
+            for c in ("injury_report", *QB_CHANGE_FEATURES, "qb_starter_listed")
+            if c in player_features.columns
+        ]
         ratings = ratings.join(
             player_features.select(
                 "season", "week", "team", *PLAYER_FEATURES, "player_proj_missing", *extra
@@ -136,6 +141,7 @@ def build_games(
             how="left",
         ).with_columns(
             pl.col(PLAYER_FEATURES).fill_null(0.0),
+            *[pl.col(c).fill_null(0.0) for c in QB_CHANGE_FEATURES if c in extra],
             pl.col("player_proj_missing").fill_null(len(PLAYER_FEATURES)),
         )
 
@@ -275,7 +281,7 @@ def _features(offense: str, defense: str) -> dict[str, pl.Expr]:
         "def_success": dev(defense, "def_success", "success"),
         "def_pace": dev(defense, "pace", "pace"),
         # Player-based ratings are already deviations from the league role average.
-        **{f: pl.col(f"{offense}{f}") for f in PLAYER_FEATURES},
+        **{f: pl.col(f"{offense}{f}") for f in (*PLAYER_FEATURES, *QB_CHANGE_FEATURES)},
         # Context (Phase 6): own and opponent rest; indoor and wind are the same for both.
         "rest": pl.col(f"{offense}rest"),
         "opp_rest": pl.col(f"{defense}rest"),
@@ -295,7 +301,8 @@ def design_matrices(games: pl.DataFrame, features: Sequence[str]) -> tuple[Float
     if not features:
         empty = np.zeros((games.height, 0))
         return empty, empty.copy()
-    missing = [f for f in features if f in PLAYER_FEATURES and f"h_{f}" not in games.columns]
+    needs_players = (*PLAYER_FEATURES, *QB_CHANGE_FEATURES)
+    missing = [f for f in features if f in needs_players and f"h_{f}" not in games.columns]
     if missing:
         raise ValueError(f"player features {missing} need build_games(player_features=...)")
     out = []
