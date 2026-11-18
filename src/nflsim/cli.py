@@ -39,7 +39,9 @@ from nflsim.matchup_eval import coverage as matchup_coverage
 from nflsim.matchup_eval import pass_epa_gate, pressure_gate, rating_skill
 from nflsim.model.matchups import dropback_matchups, matchup_game_stats, matchup_ratings_as_of
 from nflsim.model.players import player_game_stats, usage_history
+from nflsim.overrides import Override, OverrideKind, apply_overrides, resolve, week_roster
 from nflsim.pipeline import (
+    MATCHUP_ID,
     MatchupResult,
     availability_report,
     load_games_with_lineups,
@@ -247,14 +249,41 @@ def simulate(
         bool,
         typer.Option(help="Use cached data as it is; never download (stale data is used)."),
     ] = False,
+    out: Annotated[
+        list[str] | None,
+        typer.Option("--out", help="Player who will not play (name or GSIS ID; repeatable)."),
+    ] = None,
+    plays: Annotated[
+        list[str] | None,
+        typer.Option("--plays", help="Player who will play regardless of the report."),
+    ] = None,
+    doubtful: Annotated[
+        list[str] | None,
+        typer.Option("--doubtful", help="Player treated as doubtful (config doubtful rate)."),
+    ] = None,
+    compare: Annotated[
+        bool,
+        typer.Option(help="With overrides: also run without them (same seed) and show both."),
+    ] = False,
     config: ConfigOption = None,
 ) -> None:
     """Simulate one game from ratings as of the given week.
 
     Uses the real scheduled game when the teams meet that week, refreshes current-season
-    data that is out of date (unless --offline), and prints what data it used.
+    data that is out of date (unless --offline), and prints what data it used. --out,
+    --plays and --doubtful override the injury report for either team.
     """
     settings = load_settings(config)
+    by_kind: list[tuple[OverrideKind, list[str] | None]] = [
+        ("out", out),
+        ("plays", plays),
+        ("doubtful", doubtful),
+    ]
+    requested = [Override(kind, name) for kind, names in by_kind for name in names or []]
+    if requested and injuries is False:
+        raise typer.BadParameter("overrides need injury-aware features; drop --no-injuries")
+    if requested:
+        injuries = True  # overrides act through the injury-aware lineup
     if injuries is not None:
         features = settings.model.features
         if injuries:
@@ -264,10 +293,22 @@ def simulate(
         )
         settings = settings.model_copy(update={"model": model_cfg})
     cache = DataCache(settings.data, offline=offline)
+    effects = None
+    base = None
     try:
         schedules = cache.load("schedules", [season])
         matchup = find_matchup(schedules, season, week, home, away, neutral)
         games, lineup = load_games_with_lineups(cache, settings, season, extra=matchup.row)
+        if requested and lineup is not None:
+            info = games.filter(pl.col("game_id") == MATCHUP_ID).row(0, named=True)
+            rosters = roster_weeks(cache.load("rosters_weekly", [season]), cache.load("players"))
+            roster = week_roster(rosters, season, week, (info["home_team"], info["away_team"]))
+            resolved = resolve(requested, roster)
+            if compare:
+                base = predict_matchup(games, settings, n, seed, lineup)
+            games, lineup, effects = apply_overrides(
+                games, MATCHUP_ID, lineup, resolved, settings.injuries
+            )
         r = predict_matchup(games, settings, n, seed, lineup)
     except (ValueError, FileNotFoundError) as err:
         raise typer.BadParameter(str(err)) from err
@@ -302,7 +343,50 @@ def simulate(
             )
     for flag in r.flags:
         typer.echo(f"  flag: {flag}")
+    if effects is not None:
+        _scenario(effects, r, base)
     _what_i_used(cache, settings, schedules, matchup, r, lineup is not None)
+
+
+def _scenario(effects: pl.DataFrame, r: MatchupResult, base: MatchupResult | None) -> None:
+    """Print the overrides, what each changed, and (with --compare) the effect."""
+    typer.echo("\nScenario (overrides; chance to play before -> after)")
+    typer.echo("  " + format_table(effects, [("before", 2), ("after", 2)]).replace("\n", "\n  "))
+    for row in effects.filter(pl.col("before").is_null()).iter_rows(named=True):
+        typer.echo(
+            f"  note: {row['player']} ({row['position']}) has no projected role in the model "
+            "(only QB, RB, WR and TE with recent usage count), so this override does not "
+            "change the prediction"
+        )
+    skill = effects.filter(pl.col("before").is_not_null() & (pl.col("position") != "QB"))
+    if not skill.is_empty():
+        typer.echo(
+            "  note: the model's running back and receiver ratings barely tell players apart "
+            "(Phase 2: about 0.5% skill), so RB/WR/TE overrides move predictions very little; "
+            "QB overrides matter most"
+        )
+    if base is None:
+        return
+    rows = [
+        (f"{r.home} win probability", base.home_win_prob, r.home_win_prob, True),
+        (f"expected points {r.home}", base.expected_home, r.expected_home, False),
+        (f"expected points {r.away}", base.expected_away, r.expected_away, False),
+        (f"mean margin ({r.home} minus {r.away})", base.mean_margin, r.mean_margin, False),
+        ("mean total", base.mean_total, r.mean_total, False),
+    ]
+    table = pl.DataFrame(
+        {
+            "": [x[0] for x in rows],
+            "without": [x[1] for x in rows],
+            "with": [x[2] for x in rows],
+            "change": [x[2] - x[1] for x in rows],
+        }
+    )
+    typer.echo(f"\n  Compared with no overrides (same seed {r.seed}):")
+    typer.echo(
+        "  "
+        + format_table(table, [("without", 3), ("with", 3), ("change", 3)]).replace("\n", "\n  ")
+    )
 
 
 def _what_i_used(

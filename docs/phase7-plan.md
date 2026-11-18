@@ -1,6 +1,6 @@
 # Phase 7 plan: scenarios and output
 
-Status: **in progress** (2026-11-17). Step 1 (live matchups) is done.
+Status: **in progress** (2026-11-17). Steps 1 (live matchups) and 2 (overrides) are done.
 
 ## Goal
 
@@ -66,6 +66,22 @@ stat lines) are backtested like everything else.
   injury. An override for a player not on either roster is an error, not a silent no-op.
 - Output shows the scenario and, with `--compare`, the same seed without the overrides,
   so the effect of "QB out" is a clean difference.
+
+**Result (done, `nflsim.overrides`):** `--out`, `--plays`, `--doubtful` (repeatable),
+`--compare`. Names match the week's roster (or the latest earlier roster week) by GSIS
+ID, full name or unique last name, ignoring case, accents, punctuation and suffixes;
+ambiguous names list every candidate, unknown or repeated players are errors. Overrides
+switch injury-aware features on for the run and change the lineup's chance to play
+directly, then the matchup's expected player features are recomputed, so `--compare`
+needs no reload.
+
+Example (2026 week 9, NYJ at KC, `--out Mahomes --compare`): KC win probability 71.0% ->
+61.9%, KC expected points -3.4. What it shows about the model:
+- **QB overrides matter; RB/WR/TE overrides barely do.** "Garrett Wilson plays" moved
+  NYJ by -0.03 points: the model rates him slightly *below* his backups per target
+  (-0.001 vs. +0.025 and +0.076 EPA), and the receiving coefficient is small (5.5 vs. 20.3
+  for QB). That matches Phase 2 (target ratings ~0.5% skill); the output now says so.
+- Defenders and players with no projected role are reported as having no effect.
 
 ### Step 3: per-player stat lines
 
