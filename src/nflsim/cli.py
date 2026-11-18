@@ -33,8 +33,8 @@ from nflsim.injury_eval import (
     report_outcomes,
 )
 from nflsim.matchup_eval import coverage as matchup_coverage
-from nflsim.matchup_eval import rating_skill
-from nflsim.model.matchups import matchup_game_stats, matchup_ratings_as_of
+from nflsim.matchup_eval import pass_epa_gate, pressure_gate, rating_skill
+from nflsim.model.matchups import dropback_matchups, matchup_game_stats, matchup_ratings_as_of
 from nflsim.model.players import player_game_stats, usage_history
 from nflsim.pipeline import (
     availability_report,
@@ -356,11 +356,22 @@ def matchup_eval(
     seasons: Annotated[str, typer.Option(help="Seasons to measure, e.g. '2016-2025'.")] = (
         "2016-2025"
     ),
+    fit_seasons: Annotated[
+        str, typer.Option(help="Seasons the pressure models are fit on (step 3 gate).")
+    ] = "2018-2022",
+    test_seasons: Annotated[
+        str, typer.Option(help="Seasons the pressure models are scored on (step 3 gate).")
+    ] = "2023-2025",
+    n_boot: Annotated[int, typer.Option(help="Bootstrap resamples of games.", min=100)] = 2000,
+    seed: Annotated[int, typer.Option(help="RNG seed for the bootstrap.")] = 42,
     config: ConfigOption = None,
 ) -> None:
-    """Check the participation data behind matchups: pressure, coverage, rushers (Phase 4)."""
+    """Check the participation data and pass rush matchups (Phase 4, steps 1-3)."""
     settings = load_settings(config)
-    wanted = parse_seasons(seasons)
+    fit, test = parse_seasons(fit_seasons), parse_seasons(test_seasons)
+    if set(fit) & set(test):
+        raise typer.BadParameter("fit and test seasons must not overlap")
+    wanted = sorted(set(parse_seasons(seasons)) | set(fit) | set(test))
     cache = DataCache(settings.data)
     # One season earlier too, so ratings in the first season have last season's prior.
     first = max(min(wanted) - 1, cache.spec("participation").first_season or 0)
@@ -385,6 +396,23 @@ def matchup_eval(
     )
     skill = rating_skill(stats, ratings, wanted)
     typer.echo(format_table(skill, [("mse", 5), ("mse_league", 5), ("skill", 4)]))
+
+    frame = dropback_matchups(all_plays, ratings)
+    gate, models = pressure_gate(frame, fit, test, n_boot, seed)
+    typer.echo(
+        f"\nStep 3 gate, part 1: pressure on each dropback (fit {fit_seasons}, scored on "
+        f"{test_seasons}).\nlog loss: lower is better; vs_additive: difference from the "
+        "fitted additive model,\nwith a 95% interval from resampling games. The matchup "
+        "term must beat additive."
+    )
+    typer.echo(format_table(gate, [(c, 5) for c in gate.columns if c != "model"]))
+    epa = pass_epa_gate(frame, models, test, n_boot, seed)
+    typer.echo(
+        "\nStep 3 gate, part 2: each team-game's EPA per dropback (squared error weighted "
+        "by dropbacks).\nadditive: league + offense + defense EPA; mixture/<model>: "
+        "pressure chance x EPA pressured\n+ the rest x EPA clean."
+    )
+    typer.echo(format_table(epa, [(c, 5) for c in epa.columns[2:]]))
 
 
 @app.command("injury-eval")

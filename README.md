@@ -123,7 +123,7 @@ CI runs all four on Python 3.11 and 3.12 for every push and pull request. See
 | 1 | Baseline team-rating sim with shrinkage and a backtest harness (the benchmark) | ✅ |
 | 2 | Player-level ratings | ✅ (opt-in; no backtest gain) |
 | 3 | Injuries for both rosters, sampled per simulation | ✅ (opt-in; no significant backtest gain) |
-| 4 | Position-group and individual matchups | |
+| 4 | Position-group and individual matchups | ⛔ stopped: pass-rush matchup tested, no gain ([plan and results](docs/phase4-plan.md)) |
 | 5 | Tendencies, game script, drive/play-level engine | |
 | 6 | Context: home field, rest, travel, weather, coaching | |
 | 7 | Scenarios ("QB1 out"), CLI output, optional dashboard | |

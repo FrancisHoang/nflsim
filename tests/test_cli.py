@@ -211,10 +211,24 @@ def test_matchup_eval_reports_pressure_coverage(
     cfg = tmp_path / "cfg.toml"
     cfg.write_text(f"[data]\ncache_dir = '{(tmp_path / 'data').as_posix()}'\n")
     result = runner.invoke(
-        cli.app, ["matchup-eval", "--seasons", "2017-2018", "--config", str(cfg)]
+        cli.app,
+        [
+            "matchup-eval",
+            "--seasons",
+            "2017-2018",
+            "--fit-seasons",
+            "2017",
+            "--test-seasons",
+            "2018",
+            "--n-boot",
+            "100",
+            "--config",
+            str(cfg),
+        ],
     )
     assert result.exit_code == 0, result.output
     assert "pressure_rate" in result.output and "pfr_ratio" in result.output
+    assert "Step 3 gate, part 1" in result.output and "mixture/matchup" in result.output
     lines = [line.split() for line in result.output.splitlines()]
     seasons = {row[0]: row for row in lines if row and row[0] in ("2017", "2018")}
     assert seasons["2017"][-2:] == ["None", "None"]  # no PFR data before 2018

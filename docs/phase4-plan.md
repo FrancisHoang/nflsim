@@ -1,7 +1,8 @@
 # Phase 4 plan: matchups
 
-Status: **in progress** (2026-11-17). Steps 1 (data layer) and 2 (ratings) are done; see
-the findings under data gaps and step 2.
+Status: **stopped at the step 3 gate** (2026-11-17). Steps 1-3 are done. The pass-rush
+matchup did not beat the additive model, so per the stopping rule steps 4-5 were not
+built. See the step 3 result.
 
 ## Goal
 
@@ -86,6 +87,39 @@ the Phase 1 additive pass ratings on the same games.
 
 Pass/fail: lower log loss for pressure and lower squared error for game pass EPA than
 the additive model, on the 2023-2025 holdout, with a paired bootstrap interval.
+
+**Result: fail** (`nflsim matchup-eval`, fit 2018-2022, scored on 2023-2025; 95% intervals
+from resampling games, 2,000 resamples, seed 42). The all-dropback EPA rating used as the
+additive baseline was added in this step (prior 400 dropbacks).
+
+| Pressure model | Log loss | vs. additive | 95% CI |
+|---|---|---|---|
+| League rate only | 0.60458 | +0.00175 | [+0.00105, +0.00244] |
+| Log5 (nothing fit) | 0.60267 | -0.00015 | [-0.00031, +0.00002] |
+| Additive (fitted weights) | 0.60283 | 0 | |
+| Additive + matchup term | 0.60283 | 0.00000 | [-0.00003, +0.00004] |
+
+| Team-game EPA per dropback | MSE | vs. additive | 95% CI |
+|---|---|---|---|
+| League average | 0.10121 | +0.00831 | [+0.00572, +0.01084] |
+| Additive EPA rating | 0.09290 | 0 | |
+| Pressure mixture, log5 | 0.09422 | +0.00132 | [+0.00019, +0.00243] |
+| Pressure mixture, additive | 0.09403 | +0.00113 | [-0.00000, +0.00225] |
+| Pressure mixture, matchup | 0.09405 | +0.00115 | [+0.00001, +0.00228] |
+
+- The team ratings carry real signal: both beat the league average clearly.
+- The matchup term adds nothing to pressure prediction. Its fitted weight is positive
+  (0.73), but the gain is zero to five decimals.
+- Splitting pass EPA into pressured and clean dropbacks is *worse* than one overall EPA
+  rating: the extra pieces (especially EPA under pressure, which is close to noise at team
+  level) add estimation error without adding information.
+- Within one era (fit 2018-2020, scored on 2021-2022) the result is the same: matchup term
+  +0.00003 (CI [-0.00005, +0.00012]); mixtures vs. additive +0.00011 to +0.00028, CIs
+  including 0. So the failure is not an artifact of the 2023 definition change.
+
+Conclusion: at team level, how much pressure a game produces is explained by the
+offense's and defense's own rates combined (log5); there is no extra matchup effect to
+capture, and modeling pass offense through pressure does not beat a plain EPA rating.
 
 ### Step 4: game model and backtest
 
