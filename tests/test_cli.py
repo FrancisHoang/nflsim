@@ -169,3 +169,53 @@ def test_player_eval_runs_end_to_end(tmp_path: Path, monkeypatch: pytest.MonkeyP
     assert result.exit_code == 0, result.output
     assert "dropback" in result.output and "skill_rating" in result.output
     assert "tv_distance" in result.output
+
+
+def test_matchup_eval_reports_pressure_coverage(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import polars as pl
+
+    from tests.test_participation import PART, PBP
+
+    # Game IDs are unique per season, as in nflverse.
+    def season_pbp(season: int) -> pl.DataFrame:
+        return PBP.collect().with_columns(
+            season=pl.lit(season, pl.Int32), game_id=pl.lit(f"{season}_g1")
+        )
+
+    def season_participation(season: int) -> pl.DataFrame:
+        return PART.with_columns(nflverse_game_id=pl.lit(f"{season}_g1"))
+
+    def pfr_pass(season: int) -> pl.DataFrame:
+        return pl.DataFrame(
+            {
+                "game_id": [f"{season}_g1"],
+                "season": [season],
+                "week": [1],
+                "team": ["OAK"],
+                "opponent": ["KC"],
+                "times_pressured": [4.0],
+                "times_sacked": [1.0],
+            }
+        )
+
+    fake = {
+        "pbp": DatasetSpec("pbp", "", first_season=1999, fetch_season=season_pbp),
+        "participation": DatasetSpec(
+            "participation", "", first_season=2016, fetch_season=season_participation
+        ),
+        "pfr_pass": DatasetSpec("pfr_pass", "", first_season=2018, fetch_season=pfr_pass),
+    }
+    monkeypatch.setattr("nflsim.data.cache.DATASETS", fake)
+    cfg = tmp_path / "cfg.toml"
+    cfg.write_text(f"[data]\ncache_dir = '{(tmp_path / 'data').as_posix()}'\n")
+    result = runner.invoke(
+        cli.app, ["matchup-eval", "--seasons", "2017-2018", "--config", str(cfg)]
+    )
+    assert result.exit_code == 0, result.output
+    assert "pressure_rate" in result.output and "pfr_ratio" in result.output
+    lines = [line.split() for line in result.output.splitlines()]
+    seasons = {row[0]: row for row in lines if row and row[0] in ("2017", "2018")}
+    assert seasons["2017"][-2:] == ["None", "None"]  # no PFR data before 2018
+    assert seasons["2018"][-2] == "0.500"  # 2 participation pressures per 4 PFR pressures

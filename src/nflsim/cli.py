@@ -15,9 +15,11 @@ from nflsim.data import (
     PBP_PLAYER_COLUMNS,
     DataCache,
     depth_chart_weeks,
+    dropbacks,
     id_coverage,
     injury_reports,
     parse_seasons,
+    pfr_team_pressure,
     player_snaps,
     roster_weeks,
     unmatched_snaps,
@@ -30,6 +32,7 @@ from nflsim.injury_eval import (
     rate_table,
     report_outcomes,
 )
+from nflsim.matchup_eval import coverage as matchup_coverage
 from nflsim.model.players import player_game_stats, usage_history
 from nflsim.pipeline import (
     availability_report,
@@ -344,6 +347,27 @@ def player_coverage(
         else:
             typer.echo(f"\nMost-used unmatched snap-count players (top {top}):")
             typer.echo(format_table(worst, [("offense_snaps", 0), ("defense_snaps", 0)]))
+
+
+@app.command("matchup-eval")
+def matchup_eval(
+    seasons: Annotated[str, typer.Option(help="Seasons to measure, e.g. '2016-2025'.")] = (
+        "2016-2025"
+    ),
+    config: ConfigOption = None,
+) -> None:
+    """Check the participation data behind matchups: pressure, coverage, rushers (Phase 4)."""
+    settings = load_settings(config)
+    wanted = parse_seasons(seasons)
+    cache = DataCache(settings.data)
+    plays = dropbacks(cache.scan("pbp", wanted), cache.load("participation", wanted))
+    pfr_seasons = [s for s in wanted if s >= (cache.spec("pfr_pass").first_season or 0)]
+    pfr = pfr_team_pressure(cache.load("pfr_pass", pfr_seasons)) if pfr_seasons else None
+    typer.echo(f"Dropbacks with participation data ({seasons}). pfr_*: check against PFR")
+    typer.echo("pressures allowed per team-game (from 2018).")
+    table = matchup_coverage(plays, pfr)
+    digits = [(c, 3) for c in table.columns if c not in ("season", "dropbacks")]
+    typer.echo(format_table(table, digits))
 
 
 @app.command("injury-eval")

@@ -1,6 +1,7 @@
 # Phase 4 plan: matchups
 
-Status: **proposed** (2026-11-17). Nothing here is built yet.
+Status: **in progress** (2026-11-17). Step 1 (data layer) is done; see its findings under
+data gaps.
 
 ## Goal
 
@@ -95,17 +96,26 @@ In order of expected value:
 
 ## Data gaps and assumptions
 
-- **Pressure definition changes.** Pressure is known on ~89-91% of dropbacks in
-  2016-2022 and 100% from 2023. The pressure rate is lower in 2016-2017 (~25% vs. ~29%),
-  and from 2023 pressured dropbacks average -0.44 EPA vs. -0.03 before at a similar rate,
-  so the definition or source changed. Ratings must be normalized within each season, and
-  the 2023-2025 holdout crosses that change, which makes it a hard but honest test.
+- **Pressure definition changes (found in step 1).** Before 2023 sacks carry no pressure
+  flag at all and scrambles almost none; from 2023 both are always flagged. That, not a
+  different source, explains why pressured dropbacks looked much worse from 2023 (-0.44
+  vs. -0.03 EPA). Counting every sack as pressure and leaving scrambles out makes the eras
+  comparable: pressure is known on 100% of non-scramble dropbacks in every season, and
+  pressured dropbacks run -0.35 to -0.41 EPA before 2023 and -0.45 to -0.57 after (clean:
+  +0.16 to +0.27). The pressure rate still shifts by era (29% in 2016-2017, 33-36% in
+  2018-2022, 28-30% from 2023), so ratings are normalized within each season, and the
+  2023-2025 holdout crosses the change, which makes it a hard but honest test.
+- **Participation vs. PFR pressures** (2018-2025): participation counts 1.27-1.56
+  pressures per PFR pressure, and the two counts correlate 0.64-0.73 across team-games.
+  They broadly agree but are noisy measures of the same thing.
 - **PFR advanced stats start in 2018** but are consistent through 2025 (~4,700-5,400
   defender pressures per season), so they can cross-check the participation data across
   the 2023 change.
-- **Coverage type is missing in 2016-2017** and about half of 2023-2025 plays have
-  `defense_coverage_type` (man/zone type is complete), so coverage matchups use
-  2018 onward and man/zone only.
+- **Man/zone is missing in 2016-2017**; it is known on ~89% of dropbacks in 2018-2022
+  and ~100% from 2023, but the man share jumps around from 2023 (42%, 48%, 31% vs. 29-37%
+  before), another definition change. Coverage matchups use 2018 onward, normalized per
+  season. Participation marks unknowns with empty strings, which the data layer turns
+  into nulls.
 - **No individual coverage assignments** in nflverse: which corner covered which
   receiver is unknown, so WR vs. CB can only be modeled at team or position-group level.
 - **Pressure is shared between QB and line.** Holding the ball long causes pressure. The
