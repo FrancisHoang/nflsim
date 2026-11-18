@@ -297,6 +297,8 @@ class BacktestConfig(BaseModel):
 
     # Equal-width bins of predicted home win probability in the calibration table.
     calibration_bins: int = Field(default=10, ge=2)
+    # Absolute margins whose simulated frequency is compared with reality (key numbers).
+    key_margins: tuple[int, ...] = (1, 3, 4, 6, 7, 10, 14)
 
 
 class TuningConfig(BaseModel):

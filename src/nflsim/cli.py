@@ -24,6 +24,7 @@ from nflsim.data import (
     roster_weeks,
     unmatched_snaps,
 )
+from nflsim.distribution import distribution_summary, key_number_table, line_calibration
 from nflsim.injury_eval import (
     brier_scores,
     coverage,
@@ -183,6 +184,24 @@ def backtest(
     for method in ("model", "vegas"):
         typer.echo(f"\nCalibration ({method}): predicted vs. actual home win rate")
         typer.echo(format_table(calibration(predictions, method, bins), [("lo", 1), ("hi", 1)]))
+
+    typer.echo(
+        "\nWhole-distribution scores: CRPS of margin and total (lower is better; Vegas as a"
+        "\nnormal around the closing line with the training seasons' spread)"
+    )
+    typer.echo(
+        format_table(distribution_summary(predictions), [("crps_margin", 3), ("crps_total", 3)])
+    )
+    for kind, label in (("cover", "home covers the spread"), ("over", "game goes over the total")):
+        typer.echo(f"\nModel chance the {label} vs. actual (pushes left out)")
+        typer.echo(format_table(line_calibration(predictions, kind, bins), [("lo", 1), ("hi", 1)]))
+    typer.echo("\nKey numbers: share of games with each absolute margin, actual vs. model")
+    typer.echo(
+        format_table(
+            key_number_table(predictions, settings.backtest.key_margins),
+            [("actual", 3), ("model", 3)],
+        )
+    )
 
     if output is not None:
         output.parent.mkdir(parents=True, exist_ok=True)
