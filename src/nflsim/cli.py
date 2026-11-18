@@ -24,6 +24,7 @@ from nflsim.data import (
     roster_weeks,
     unmatched_snaps,
 )
+from nflsim.data.drives import drive_coverage, drives
 from nflsim.distribution import distribution_summary, key_number_table, line_calibration
 from nflsim.injury_eval import (
     brier_scores,
@@ -432,6 +433,24 @@ def matchup_eval(
         "pressure chance x EPA pressured\n+ the rest x EPA clean."
     )
     typer.echo(format_table(epa, [(c, 5) for c in epa.columns[2:]]))
+
+
+@app.command("drive-eval")
+def drive_eval(
+    seasons: Annotated[str, typer.Option(help="Seasons to measure, e.g. '2016-2025'.")] = (
+        "2016-2025"
+    ),
+    config: ConfigOption = None,
+) -> None:
+    """Check the drive table built from play-by-play (Phase 5): results, field position,
+    clock, and whether drive points add up to every final score."""
+    settings = load_settings(config)
+    wanted = parse_seasons(seasons)
+    cache = DataCache(settings.data)
+    table = drive_coverage(drives(cache.scan("pbp", wanted)), cache.load("schedules", wanted))
+    typer.echo(f"Drives by season ({seasons}). score_match: share of games where drive")
+    typer.echo("points equal both final scores. Result columns are shares of drives.")
+    typer.echo(format_table(table, [(c, 3) for c in table.columns if c != "season"]))
 
 
 @app.command("injury-eval")
