@@ -1,6 +1,7 @@
 """Data access: nflverse datasets cached locally as parquet."""
 
 from nflsim.data.cache import DataCache
+from nflsim.data.injuries import depth_chart_weeks, injury_reports, kickoffs
 from nflsim.data.players import (
     PBP_PLAYER_COLUMNS,
     id_coverage,
@@ -20,7 +21,10 @@ __all__ = [
     "DataCache",
     "DatasetSpec",
     "current_season",
+    "depth_chart_weeks",
     "id_coverage",
+    "injury_reports",
+    "kickoffs",
     "normalize_teams",
     "parse_seasons",
     "pfr_crosswalk",

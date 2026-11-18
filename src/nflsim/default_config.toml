@@ -70,6 +70,33 @@ usage_half_life_games = { dropback = 0.25, carry = 1.0, target = 2.0 }
 # Weekly-roster statuses that rule a player out (known days before kickoff).
 unavailable_statuses = ["RES", "PUP", "SUS", "CUT", "RET", "NWT"]
 
+[injuries]
+# Chance a player plays given his final injury report (Phase 3). status: game status on
+# the final report (none = on the practice report without one); practice: last practice
+# participation (dnp, limited, full; none = not recorded).
+# Measured with `nflsim injury-eval` on 2016-2022 (2026-11-17); cells with under ~50
+# players pooled with their status. Players whose weekly roster status rules them out
+# ([player_ratings] unavailable_statuses) are excluded: that is known separately.
+# A regular had at least this share of offensive or defensive snaps in the team's
+# previous game. Regulars listed questionable play far more often than others
+# (questionable + limited: 81% vs. 58%).
+regular_min_share = 0.25
+# Doubtful players almost never play (1-2%), and Out players never do.
+play_probability_regular.out = { dnp = 0.0, limited = 0.0, full = 0.0, none = 0.0 }
+play_probability_regular.doubtful = { dnp = 0.02, limited = 0.02, full = 0.02, none = 0.02 }
+play_probability_regular.questionable = { dnp = 0.50, limited = 0.81, full = 0.95, none = 0.70 }
+play_probability_regular.none = { dnp = 0.98, limited = 0.99, full = 0.99, none = 0.99 }
+play_probability_other.out = { dnp = 0.0, limited = 0.0, full = 0.0, none = 0.0 }
+play_probability_other.doubtful = { dnp = 0.01, limited = 0.01, full = 0.01, none = 0.01 }
+play_probability_other.questionable = { dnp = 0.28, limited = 0.58, full = 0.77, none = 0.70 }
+play_probability_other.none = { dnp = 0.74, limited = 0.86, full = 0.89, none = 0.89 }
+# Regulars not on the report at all (misses are healthy scratches and roster moves).
+unlisted_regular = 0.97
+# Added to the questionable rate at these positions (clipped to [0, 1]). Questionable
+# regular QBs played 65% in 2016-2022 (n=120) and 50% in 2023-2025 (n=56), vs. ~79% for
+# other regulars. Other positions are within about 0.1 and not adjusted.
+questionable_position_adjustment = { QB = -0.15 }
+
 [sim]
 # Points added to the winner when a simulated game ends tied (overtime, usually a field goal).
 # The overtime winner is drawn with probability proportional to each team's expected points.

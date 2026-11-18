@@ -152,6 +152,61 @@ class PlayerRatingsConfig(BaseModel):
         return self
 
 
+ReportStatus = Literal["out", "doubtful", "questionable", "none"]
+Practice = Literal["dnp", "limited", "full", "none"]
+REPORT_STATUSES: tuple[ReportStatus, ...] = ("out", "doubtful", "questionable", "none")
+PRACTICES: tuple[Practice, ...] = ("dnp", "limited", "full", "none")
+
+PlayTable = dict[ReportStatus, dict[Practice, float]]
+
+
+class InjuriesConfig(BaseModel):
+    """Chance a player plays given his final injury report (Phase 3).
+
+    ``status`` is the game status on the final report (``none``: on the practice report
+    with no game status) and ``practice`` the last practice participation. Players are
+    split into regulars (at least ``regular_min_share`` of the offensive or defensive
+    snaps in the team's previous game) and others, since regulars listed questionable
+    play far more often. Regulars not on the report at all play with
+    ``unlisted_regular``. Measured with ``nflsim injury-eval``.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    regular_min_share: float = Field(default=0.25, gt=0, le=1)
+    play_probability_regular: PlayTable = {
+        "out": {"dnp": 0.0, "limited": 0.0, "full": 0.0, "none": 0.0},
+        "doubtful": {"dnp": 0.02, "limited": 0.02, "full": 0.02, "none": 0.02},
+        "questionable": {"dnp": 0.50, "limited": 0.81, "full": 0.95, "none": 0.70},
+        "none": {"dnp": 0.98, "limited": 0.99, "full": 0.99, "none": 0.99},
+    }
+    play_probability_other: PlayTable = {
+        "out": {"dnp": 0.0, "limited": 0.0, "full": 0.0, "none": 0.0},
+        "doubtful": {"dnp": 0.01, "limited": 0.01, "full": 0.01, "none": 0.01},
+        "questionable": {"dnp": 0.28, "limited": 0.58, "full": 0.77, "none": 0.70},
+        "none": {"dnp": 0.74, "limited": 0.86, "full": 0.89, "none": 0.89},
+    }
+    unlisted_regular: float = Field(default=0.97, ge=0, le=1)
+    # Added to the play probability of questionable players at these report positions
+    # (result clipped to [0, 1]). Questionable QBs sit far more often than other players.
+    questionable_position_adjustment: dict[str, float] = {"QB": -0.15}
+
+    @model_validator(mode="after")
+    def _complete_tables(self) -> Self:
+        for name in ("play_probability_regular", "play_probability_other"):
+            table = getattr(self, name)
+            for status in REPORT_STATUSES:
+                row = table.get(status)
+                if row is None:
+                    raise ValueError(f"injuries.{name} is missing status {status!r}")
+                missing = [p for p in PRACTICES if p not in row]
+                if missing:
+                    raise ValueError(f"injuries.{name}.{status} is missing {missing}")
+                if any(not 0 <= v <= 1 for v in row.values()):
+                    raise ValueError(f"injuries.{name}.{status} must be within [0, 1]")
+        return self
+
+
 class SimConfig(BaseModel):
     """Monte Carlo score simulation."""
 
@@ -199,6 +254,7 @@ class Settings(BaseModel):
     ratings: RatingsConfig = RatingsConfig()
     model: ModelConfig = ModelConfig()
     player_ratings: PlayerRatingsConfig = PlayerRatingsConfig()
+    injuries: InjuriesConfig = InjuriesConfig()
     sim: SimConfig = SimConfig()
     backtest: BacktestConfig = BacktestConfig()
     tuning: TuningConfig = TuningConfig()
