@@ -1,6 +1,8 @@
 # Phase 5 plan: drive-level engine
 
-Status: **in progress** (2026-11-17). Step 0 is done (benchmark below).
+Status: **stopped at the step 4 gate** (2026-11-17). Steps 0-4 are done. The drive engine
+does not beat the current engine on margin CRPS, so it stays opt-in (`[sim] engine =
+"drive"`) and step 5 (game script) was not built. See "Results, steps 2-4".
 
 ## Goal
 
@@ -107,6 +109,48 @@ Brier, log loss, margin and total MAE, CRPS, cover calibration, key numbers.
 CRPS improves with a 95% CI below 0 **and** Brier and log loss are no worse in point
 estimate. If it improves the shape (key numbers, CRPS) but not win probability, it ships
 opt-in. Otherwise it is reported as no gain.
+
+### Results, steps 2-4
+
+**As built** (`nflsim.model.drive_engine`, config `[drives]`): instead of a parametric drive
+model, each simulated drive **resamples a real drive** from the training seasons that
+started in the same field-position bin (10 yards) and clock bucket (<=120, 120-420, >420
+seconds left in the half), bringing its points for both sides, time used and the
+opponent's next start. Kickoff starts come from the latest training season; overtime
+follows each season's rules. **Team strength** is exponential tilting toward drives with
+more net points, with each team's tilt set so its mean points match the points model, then
+corrected by two pilot simulations (2,000 runs). So the engine changes the *shape* of the
+score distribution and keeps the existing model's means. 285 games x 10,000 runs take
+about 30-45 seconds.
+
+**League-average check (step 2):** about 2.0 points per drive and totals near 47, but
+absolute margins of 3 come out at **7.3%** (actual 15.2%); 7s at 7.4% (actual 7.5%).
+
+**Gate (step 4):** 2021-2024, n 10000, seed 42, paired bootstrap vs. the current engine.
+
+| Metric | Drive engine | Current | Diff (95% CI) |
+|---|---|---|---|
+| CRPS margin | 7.423 | 7.404 | +0.019 [-0.008, +0.046] |
+| CRPS total | 7.499 | 7.518 | -0.019 [-0.058, +0.015] |
+| Brier | 0.2251 | 0.2254 | -0.0003 [-0.0012, +0.0007] |
+| Log loss | 0.6432 | 0.6438 | -0.0006 [-0.0027, +0.0016] |
+| Margin MAE | 10.163 | 10.169 | -0.006 |
+| Total MAE | 10.587 | 10.605 | -0.018 |
+| Calibration slope | 1.18 | 1.20 | |
+| Margins of 3 / 7 | 7.1% / 7.3% | 9.0% / 5.2% | actual 15.2% / 7.5% |
+
+**Decision (rule set before results): fail.** Margin CRPS did not improve, and neither did
+the shape overall (more 7s, fewer 3s). It is kept as an opt-in engine.
+
+What we learned:
+- **The excess of 3-point margins does not come from drive outcomes.** Resampling real
+  drives independently reproduces 7s but not 3s. The 3s come from the end of games: teams
+  playing for a tying or winning field goal, protecting a lead, and overtime field goals.
+  That is game script (step 5), so a later attempt should start there.
+- **A first run looked better on calibration (slope 1.08, Brier -0.0004), but it was an
+  artifact:** the tilt was miscalibrated (simulated totals 0.7-2.8 points above the points
+  model), which stretched margins. With pilot calibration the means match (within
+  0.1-0.6) and the slope is back to 1.18. The under-confidence is not an engine problem.
 
 ### Step 5: game script, only if step 4 passes
 

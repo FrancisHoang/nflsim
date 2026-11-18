@@ -11,6 +11,28 @@ are reported whether or not they help.
 v0.1.0 and v0.2.0 were tagged after the fact, at the commits that finished those phases.
 The package version in `pyproject.toml` was 0.1.0 until 0.3.0.
 
+## [Unreleased]
+
+Phase 5 (drive-level engine), stopped at its go/no-go test. See `docs/phase5-plan.md`.
+
+### Added
+- Backtests score the whole distribution: CRPS of margin and total (Vegas as a normal
+  around the line for reference), cover/over calibration against closing lines, and
+  key-number frequencies (`[backtest] key_margins`).
+- Drive table from play-by-play (`nflsim.data.drives`, `nflsim drive-eval`); drive points
+  add up to every final score 2016-2025.
+- Drive-by-drive engine (`[sim] engine = "drive"`, `backtest --engine drive`, config
+  `[drives]`): resampled real drives, tilted to the points model's means, with
+  per-season kickoffs and overtime rules. Opt-in.
+
+### Results
+- Benchmark (current engine): CRPS margin 7.404 (Vegas 7.126), total 7.517 (7.302).
+  Margins of 3: 15.2% actual vs. 9.0% simulated.
+- Drive engine vs. current: CRPS margin +0.019 (CI [-0.008, +0.046]), Brier -0.0003
+  (not significant), slope 1.18 vs. 1.20; margins of 3 at 7.1%. **No gain**, so it stays
+  opt-in and game script was not built. The 3s come from end-of-game behavior, not drive
+  outcomes.
+
 ## [0.4.0] - 2026-11-17
 
 Phase 4 (matchups, stopped at its go/no-go test; `docs/phase4-plan.md`) and Phase 6

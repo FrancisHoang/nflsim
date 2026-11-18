@@ -6,7 +6,7 @@ A Monte Carlo NFL game simulator. Given two teams and a week, it simulates the g
 times and reports win probability, score distributions, spread, total, and player stat
 lines, accounting for season stats, player matchups, and injuries on both rosters.
 
-> **Status:** Phases 0-3 and 6 done; Phase 4 tested and stopped (no gain). The game
+> **Status:** Phases 0-3 and 6 done; Phases 4 and 5 tested and stopped (no gain). The game
 > simulator and backtest harness work. Context (indoor, wind) is in the default model;
 > player, injury and matchup features are built but opt-in because they have not beaten
 > the baseline. See the [roadmap](#roadmap).
@@ -99,6 +99,7 @@ wind met the adoption rule (total MAE better in 3 of 4 seasons) and is now a def
 | Pass-rush matchup (Phase 4) | not added: failed its play-level gate | | |
 | Home field without 2020 (Phase 6) | 0.2256 | 0.6440 | 10.18 |
 | + rest (Phase 6) | 0.2255 | 0.6439 | 10.18 |
+| Drive-by-drive engine (Phase 5) | 0.2251 | 0.6432 | 10.16 (CRPS margin 7.42 vs. 7.40) |
 | **+ indoor, wind (Phase 6, default)** | 0.2254 | 0.6438 | 10.17 (total MAE 10.69 -> **10.61**) |
 
 ## Configuration
@@ -129,7 +130,7 @@ CI runs all four on Python 3.11 and 3.12 for every push and pull request. See
 | 2 | Player-level ratings | ✅ (opt-in; no backtest gain) |
 | 3 | Injuries for both rosters, sampled per simulation | ✅ (opt-in; no significant backtest gain) |
 | 4 | Position-group and individual matchups | ⛔ stopped: pass-rush matchup tested, no gain ([plan and results](docs/phase4-plan.md)) |
-| 5 | Tendencies, game script, drive/play-level engine | |
+| 5 | Tendencies, game script, drive/play-level engine | ⛔ drive engine built (opt-in), no gain at its gate; game script not built ([plan and results](docs/phase5-plan.md)) |
 | 6 | Context: home field, rest, travel, weather, coaching | ✅ indoor + wind by default; home field and rest no gain ([plan and results](docs/phase6-plan.md)) |
 | 7 | Scenarios ("QB1 out"), CLI output, optional dashboard | |
 
