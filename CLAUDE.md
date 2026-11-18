@@ -61,7 +61,7 @@ Monte Carlo simulator for single NFL games. Given two teams and a week, it simul
 4. ⛔ (stopped at the step 3 gate, no gain; `docs/phase4-plan.md`) Matchups: pass rush vs. pass block, WR/TE vs. CB/S, run game vs. run defense, QB vs. pressure/scheme
 5. ⛔ (drive engine built, opt-in; stopped at its gate, game script not built; `docs/phase5-plan.md`) Tendencies and game script: play-calling, pace, 4th down, red zone; engine moves from game-level to drive-level to play-level
 6. ✅ Context (indoor + wind on by default; home-field options and rest opt-in, no gain; `docs/phase6-plan.md`): home field, rest/travel, weather/dome, coaching, divisional familiarity
-7. Scenarios and output: overrides ("QB out"), N-run summaries, per-player stat lines, CLI, optional Streamlit dashboard
+7. ✅ Scenarios and output: overrides ("QB out"), N-run summaries, per-player stat lines, CLI (`simulate`, `week`), Streamlit dashboard (Week, Game, How good is it; styling pending)
 
 Mark phases done here as they merge.
 

@@ -254,6 +254,7 @@ def test_dashboard_command_runs_streamlit_with_the_config(
     assert isinstance(cmd, list) and cmd[1:4] == ["-m", "streamlit", "run"]
     assert cmd[4].endswith("app.py") and cmd[-2:] == ["--server.port", "8555"]
     assert "--server.headless" in cmd and "--browser.gatherUsageStats" in cmd
+    assert cmd[cmd.index("--server.fileWatcherType") + 1] == "none"
     assert "http://localhost:8555" in result.output
     env = seen["env"]
     assert isinstance(env, dict) and env["NFLSIM_CONFIG"] == str(cfg.resolve())

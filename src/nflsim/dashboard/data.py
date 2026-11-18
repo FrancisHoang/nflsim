@@ -7,6 +7,7 @@ or the packaged defaults. The cache is always offline: the dashboard never downl
 from __future__ import annotations
 
 import os
+import threading
 from pathlib import Path
 
 import polars as pl
@@ -22,6 +23,12 @@ from nflsim.pipeline import load_games_with_lineups
 from nflsim.weekly import WeekRun, cached_seasons, current_week, injury_settings, run_week
 
 CONFIG_ENV = "NFLSIM_CONFIG"
+# The heavy polars work (rating every game from play-by-play, simulating) runs one call
+# at a time. Streamlit runs each session, and a rerun started by a click, on its own
+# thread; the dashboard server crashed inside polars' collect() on such a load three
+# times (Windows access violation, not reproduced outside the server), so concurrent
+# loads are not allowed. Reentrant: week_run/game_run call the loaders under the lock.
+_HEAVY = threading.RLock()
 
 
 def settings() -> Settings:
@@ -52,14 +59,16 @@ def weeks(season: int) -> tuple[list[int], int | None]:
 @st.cache_resource(ttl=3600, show_spinner=False, max_entries=4)
 def games(season: int, injuries: bool) -> tuple[pl.DataFrame, pl.DataFrame | None]:
     """Rated games (and lineups) through ``season``: the slow part, kept across weeks."""
-    return load_games_with_lineups(cache(), injury_settings(settings(), injuries), season)
+    with _HEAVY:
+        return load_games_with_lineups(cache(), injury_settings(settings(), injuries), season)
 
 
 @st.cache_data(ttl=3600, show_spinner=False, max_entries=32)
 def week_run(season: int, week: int, n: int, seed: int, injuries: bool) -> WeekRun:
     """``run_week`` for the dashboard's settings (cached per argument set)."""
     s = injury_settings(settings(), injuries)
-    return run_week(cache(), s, season, week, n, seed, loaded=games(season, injuries))
+    with _HEAVY:
+        return run_week(cache(), s, season, week, n, seed, loaded=games(season, injuries))
 
 
 @st.cache_data(ttl=600, show_spinner=False)
@@ -98,7 +107,8 @@ def game_games(
     c = cache()
     matchup = find_matchup(c.load("schedules", [season]), season, week, home, away, neutral)
     s = injury_settings(settings(), injuries)
-    return load_games_with_lineups(c, s, season, extra=matchup.row)
+    with _HEAVY:
+        return load_games_with_lineups(c, s, season, extra=matchup.row)
 
 
 @st.cache_data(ttl=3600, show_spinner=False, max_entries=32)
@@ -117,17 +127,18 @@ def game_run(
     """
     injuries = injuries or bool(out or doubtful or players)
     overrides = [Override("out", x) for x in out] + [Override("doubtful", x) for x in doubtful]
-    return run_game(
-        cache(),
-        injury_settings(settings(), injuries),
-        game,
-        overrides=overrides,
-        compare=bool(overrides),
-        players=players,
-        spread=spread,
-        total=total,
-        loaded=game_games(game.season, game.week, game.home, game.away, game.neutral, injuries),
-    )
+    with _HEAVY:
+        return run_game(
+            cache(),
+            injury_settings(settings(), injuries),
+            game,
+            overrides=overrides,
+            compare=bool(overrides),
+            players=players,
+            spread=spread,
+            total=total,
+            loaded=game_games(game.season, game.week, game.home, game.away, game.neutral, injuries),
+        )
 
 
 def backtest_folder() -> Path:

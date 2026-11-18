@@ -1087,6 +1087,9 @@ def dashboard(
         "true",
         "--browser.gatherUsageStats",
         "false",
+        # No live code reloading (fewer threads; users do not edit the app).
+        "--server.fileWatcherType",
+        "none",
         "--server.port",
         str(port),
     ]
