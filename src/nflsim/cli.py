@@ -33,6 +33,8 @@ from nflsim.injury_eval import (
     report_outcomes,
 )
 from nflsim.matchup_eval import coverage as matchup_coverage
+from nflsim.matchup_eval import rating_skill
+from nflsim.model.matchups import matchup_game_stats, matchup_ratings_as_of
 from nflsim.model.players import player_game_stats, usage_history
 from nflsim.pipeline import (
     availability_report,
@@ -360,7 +362,11 @@ def matchup_eval(
     settings = load_settings(config)
     wanted = parse_seasons(seasons)
     cache = DataCache(settings.data)
-    plays = dropbacks(cache.scan("pbp", wanted), cache.load("participation", wanted))
+    # One season earlier too, so ratings in the first season have last season's prior.
+    first = max(min(wanted) - 1, cache.spec("participation").first_season or 0)
+    loaded = list(range(first, max(wanted) + 1))
+    all_plays = dropbacks(cache.scan("pbp", loaded), cache.load("participation", loaded))
+    plays = all_plays.filter(pl.col("season").is_in(wanted))
     pfr_seasons = [s for s in wanted if s >= (cache.spec("pfr_pass").first_season or 0)]
     pfr = pfr_team_pressure(cache.load("pfr_pass", pfr_seasons)) if pfr_seasons else None
     typer.echo(f"Dropbacks with participation data ({seasons}). pfr_*: check against PFR")
@@ -368,6 +374,17 @@ def matchup_eval(
     table = matchup_coverage(plays, pfr)
     digits = [(c, 3) for c in table.columns if c not in ("season", "dropbacks")]
     typer.echo(format_table(table, digits))
+
+    stats = matchup_game_stats(all_plays)
+    ratings = matchup_ratings_as_of(
+        stats, stats.select("season", "week", "team").unique(), settings.matchups
+    )
+    typer.echo(
+        "\nPass rush ratings: skill at predicting each team-game's deviation from the "
+        "league\n(1 - MSE / MSE of the league average; higher is better; config [matchups])"
+    )
+    skill = rating_skill(stats, ratings, wanted)
+    typer.echo(format_table(skill, [("mse", 5), ("mse_league", 5), ("skill", 4)]))
 
 
 @app.command("injury-eval")

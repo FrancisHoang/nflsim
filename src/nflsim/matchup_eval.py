@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import polars as pl
 
+from nflsim.model.matchups import METRIC_TOTALS
+
 
 def coverage(dropbacks: pl.DataFrame, pfr: pl.DataFrame | None) -> pl.DataFrame:
     """Per season: how much participation data exists for dropbacks and what it says.
@@ -63,3 +65,46 @@ def coverage(dropbacks: pl.DataFrame, pfr: pl.DataFrame | None) -> pl.DataFrame:
         )
     )
     return per_season.join(games, on="season", how="left").sort("season")
+
+
+def rating_skill(stats: pl.DataFrame, ratings: pl.DataFrame, seasons: list[int]) -> pl.DataFrame:
+    """Out-of-sample skill of each matchup rating at predicting the next game.
+
+    For each team-game in ``seasons`` and each side and metric, the target is the game's
+    deviation from the league average (``league_<metric>`` as of that week) and the
+    prediction is the rating as of that week (``matchup_ratings_as_of``). Errors are
+    weighted by the game's count (dropbacks, pressured or clean dropbacks).
+    ``skill = 1 - mse / mse_league``, where ``mse_league`` predicts 0 (league average);
+    higher is better, and 0 means no better than the league average. ``skill`` is null
+    when there are no games or the league average has no error.
+    """
+    games = stats.filter(pl.col("season").is_in(seasons)).join(
+        ratings, on=["season", "week", "team"], how="inner"
+    )
+    rows = []
+    for side in ("off", "def"):
+        sided = games.filter(pl.col("side") == side)
+        for metric, (total, count) in METRIC_TOTALS.items():
+            frame = sided.filter(pl.col(count) > 0).select(
+                (pl.col(total) / pl.col(count) - pl.col(f"league_{metric}")).alias("actual"),
+                pl.col(f"{side}_{metric}").alias("pred"),
+                pl.col(count).alias("w"),
+            )
+            frame = frame.drop_nulls()
+            w = pl.col("w")
+            mse, mse0 = frame.select(
+                (((pl.col("actual") - pl.col("pred")) ** 2 * w).sum() / w.sum()).alias("mse"),
+                ((pl.col("actual") ** 2 * w).sum() / w.sum()).alias("mse0"),
+            ).row(0)
+            rows.append(
+                {
+                    "side": side,
+                    "metric": metric,
+                    "games": frame.height,
+                    "mse": mse,
+                    "mse_league": mse0,
+                    # Undefined without games, or when the league average is exact.
+                    "skill": 1 - mse / mse0 if mse is not None and mse0 else None,
+                }
+            )
+    return pl.DataFrame(rows)

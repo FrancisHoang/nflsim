@@ -229,6 +229,38 @@ class SimConfig(BaseModel):
     report_min_share: float = Field(default=0.05, ge=0, le=1)
 
 
+MatchupMetric = Literal["pressure", "epa_pressured", "epa_clean"]
+MATCHUP_METRICS: tuple[MatchupMetric, ...] = ("pressure", "epa_pressured", "epa_clean")
+
+
+class MatchupsConfig(BaseModel):
+    """Pass rush vs. pass protection ratings (Phase 4).
+
+    Each rating is a deviation from the same season's league average, shrunk toward
+    ``carryover`` times last season's deviation with strength ``prior_dropbacks``.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    # Prior strength in dropbacks (pressure: all dropbacks; epa_pressured: pressured
+    # dropbacks; epa_clean: clean dropbacks).
+    prior_dropbacks: dict[MatchupMetric, float] = {
+        "pressure": 400.0,
+        "epa_pressured": 400.0,
+        "epa_clean": 800.0,
+    }
+    carryover: float = Field(default=0.5, ge=0, le=1)
+
+    @model_validator(mode="after")
+    def _all_metrics(self) -> Self:
+        missing = set(MATCHUP_METRICS) - set(self.prior_dropbacks)
+        if missing:
+            raise ValueError(f"matchups.prior_dropbacks is missing {sorted(missing)}")
+        if any(v <= 0 for v in self.prior_dropbacks.values()):
+            raise ValueError("matchups.prior_dropbacks must be positive")
+        return self
+
+
 class BacktestConfig(BaseModel):
     """Walk-forward backtest settings."""
 
@@ -269,6 +301,7 @@ class Settings(BaseModel):
     model: ModelConfig = ModelConfig()
     player_ratings: PlayerRatingsConfig = PlayerRatingsConfig()
     injuries: InjuriesConfig = InjuriesConfig()
+    matchups: MatchupsConfig = MatchupsConfig()
     sim: SimConfig = SimConfig()
     backtest: BacktestConfig = BacktestConfig()
     tuning: TuningConfig = TuningConfig()
