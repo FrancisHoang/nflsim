@@ -189,40 +189,38 @@ def _margin_chart(g: GameRun) -> None:
 
 
 def _tables(g: GameRun) -> None:
-    left, right = st.columns(2)
-    with left:
-        st.markdown("**Score ranges**")
+    # Stacked, not side by side: at laptop widths two tables clip their last column.
+    st.markdown("**Score ranges**")
+    st.dataframe(
+        score_ranges(g.result),
+        hide_index=True,
+        width="stretch",
+        column_config={
+            c: st.column_config.NumberColumn(format="%.0f")
+            for c in ("10%", "25%", "50%", "75%", "90%")
+        },
+    )
+    st.caption("10% of simulations end at or below the 10% column, and so on.")
+    st.markdown("**Against the lines**")
+    lines = line_rows(g.lines, g.result)
+    if not lines.is_empty():
+        if (lines["Push"] == 0).all():
+            lines = lines.drop("Push")
+        if (lines["Source"] == "Vegas (nflverse)").all():
+            lines = lines.drop("Source")
+    if lines.is_empty():
+        st.caption("No line for this game. Set one under *Your own line*.")
+    else:
+        pct = st.column_config.NumberColumn(format="%.1f%%")
         st.dataframe(
-            score_ranges(g.result),
+            lines,
             hide_index=True,
             width="stretch",
             column_config={
-                c: st.column_config.NumberColumn(format="%.0f")
-                for c in ("10%", "25%", "50%", "75%", "90%")
+                c: pct for c in ("Chance", "Other chance", "Push") if c in lines.columns
             },
         )
-        st.caption("10% of simulations end at or below the 10% column, and so on.")
-    with right:
-        st.markdown("**Against the lines**")
-        lines = line_rows(g.lines, g.result)
-        if not lines.is_empty():
-            if (lines["Push"] == 0).all():
-                lines = lines.drop("Push")
-            if (lines["Source"] == "Vegas (nflverse)").all():
-                lines = lines.drop("Source")
-        if lines.is_empty():
-            st.caption("No line for this game. Set one under *Your own line*.")
-        else:
-            pct = st.column_config.NumberColumn(format="%.1f%%")
-            st.dataframe(
-                lines,
-                hide_index=True,
-                width="stretch",
-                column_config={
-                    c: pct for c in ("Chance", "Other chance", "Push") if c in lines.columns
-                },
-            )
-            st.caption("From the simulated scores. This game's own line is never a model input.")
+        st.caption("From the simulated scores. This game's own line is never a model input.")
 
 
 def _scenario(g: GameRun) -> None:

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import streamlit as st
 
-from nflsim.dashboard import game_page, week_page
+from nflsim.dashboard import game_page, results_page, week_page
 
 st.set_page_config(page_title="nflsim", page_icon=":material/sports_football:", layout="wide")
 
@@ -12,6 +12,12 @@ page = st.navigation(
     [
         st.Page(week_page.render, title="Week", icon=":material/calendar_month:", url_path="week"),
         st.Page(game_page.render, title="Game", icon=":material/sports_football:", url_path="game"),
+        st.Page(
+            results_page.render,
+            title="How good is it",
+            icon=":material/insights:",
+            url_path="results",
+        ),
     ]
 )
 with st.sidebar:
