@@ -1,6 +1,6 @@
 # Phase 7 plan: scenarios and output
 
-Status: **in progress** (2026-11-17). Steps 1-3 (live matchups, overrides, stat lines) are done; step 4 is in progress (lines and JSON done).
+Status: **in progress** (2026-11-17). Steps 1-3 (live matchups, overrides, stat lines) are done; step 4 (lines, JSON, `nflsim week`) is done; the Streamlit dashboard is deferred.
 
 ## Goal
 
@@ -134,6 +134,16 @@ simulation, result with quantiles, lines, flags, may-not-play, overrides and the
 no-override result with `--compare`, stat lines with `exp_`/`low_`/`high_` per stat, and
 what was used) and nothing else on stdout. Predictions are unchanged, so there is no
 backtest; tests cover the line math and the JSON conversion.
+
+`nflsim week` (`nflsim.pipeline.predict_week`, `nflsim.summary.week_frame`): every
+scheduled game of a week in one table, in kickoff order, with the model's line next to
+Vegas's and cover/over chances against each game's own line; played games show the final
+score. The game table is built once; each game's row becomes the matchup row and goes
+through `predict_matchup` with the same seed, so a game's numbers equal `simulate`'s for
+that game (checked on 2026 week 10, with and without `--injuries`: identical up to 1e-14
+in expected points). A game that cannot be simulated is listed with the reason instead of
+stopping the week. Flags are grouped across games. Overrides and stat lines stay on
+`simulate`. The Streamlit dashboard is deferred until asked for.
 
 ### Step 5: defensive and offensive-line availability (opt-in, gated)
 

@@ -1,4 +1,5 @@
-"""Summaries of one simulated game: line probabilities and JSON output (Phase 7, step 4).
+"""Summaries of simulated games: line probabilities, a week table and JSON output
+(Phase 7, step 4).
 
 Lines are quoted the way sportsbooks quote them: the **home** team's spread, negative when
 home is favored (home -3.5 covers when it wins by 4 or more), and the game total. nflverse
@@ -15,6 +16,8 @@ from typing import Any, Literal
 
 import numpy as np
 import polars as pl
+
+from nflsim.pipeline import WeekPrediction
 
 LineKind = Literal["spread", "total"]
 LineSource = Literal["given", "schedule"]
@@ -142,7 +145,76 @@ def _clean(value: Any) -> Any:
     return value
 
 
+WEEK_SCHEMA = {
+    "game_id": pl.String,
+    "kickoff": pl.String,
+    "away": pl.String,
+    "home": pl.String,
+    "home_win": pl.Float64,
+    "model_spread": pl.Float64,
+    "vegas_spread": pl.Float64,
+    "home_cover": pl.Float64,
+    "model_total": pl.Float64,
+    "vegas_total": pl.Float64,
+    "over": pl.Float64,
+    "home_score": pl.Int64,
+    "away_score": pl.Int64,
+    "error": pl.String,
+}
+
+
+def week_frame(predictions: list[WeekPrediction], schedule: pl.DataFrame) -> pl.DataFrame:
+    """One row per game of a week, in kickoff order.
+
+    ``schedule`` holds the week's nflverse rows (normalized team codes; ``gameday``,
+    ``gametime``, ``spread_line``, ``total_line`` and scores used when present). Spreads
+    are the home team's line in sportsbook sign: ``model_spread`` is minus the mean
+    simulated margin, ``vegas_spread`` the converted nflverse line. ``home_cover`` and
+    ``over`` are chances against the Vegas lines (pushes counted as neither).
+    """
+    by_id = {row["game_id"]: row for row in schedule.iter_rows(named=True)}
+    rows: list[dict[str, Any]] = []
+    for pred in predictions:
+        info = by_id.get(pred.game_id, {})
+        day, time = info.get("gameday"), info.get("gametime")
+        kickoff = f"{day} {time}" if day and time else (day or None)
+        spread, total = info.get("spread_line"), info.get("total_line")
+        row: dict[str, Any] = {
+            "game_id": pred.game_id,
+            "kickoff": kickoff,
+            "away": info.get("away_team"),
+            "home": info.get("home_team"),
+            "vegas_spread": betting_spread(float(spread)) if spread is not None else None,
+            "vegas_total": float(total) if total is not None else None,
+            "home_score": info.get("home_score"),
+            "away_score": info.get("away_score"),
+            "error": pred.error,
+        }
+        r = pred.result
+        if r is not None:
+            margin = r.home_scores - r.away_scores
+            lines = {
+                x.kind: x
+                for x in game_lines(
+                    margin, r.home_scores + r.away_scores, None, None, spread, total
+                )
+            }
+            row |= {
+                "away": r.away,
+                "home": r.home,
+                "home_win": r.home_win_prob,
+                "model_spread": 0.0 - r.mean_margin,
+                "home_cover": lines["spread"].win if "spread" in lines else None,
+                "model_total": r.mean_total,
+                "over": lines["total"].win if "total" in lines else None,
+            }
+        rows.append(row)
+    frame = pl.DataFrame(rows, schema=WEEK_SCHEMA)
+    return frame.sort("kickoff", "game_id", nulls_last=True)
+
+
 __all__ = [
+    "WEEK_SCHEMA",
     "LineResult",
     "betting_spread",
     "format_spread",
@@ -152,4 +224,5 @@ __all__ = [
     "records",
     "spread_result",
     "total_result",
+    "week_frame",
 ]

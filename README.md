@@ -66,6 +66,13 @@ See [docs/data.md](docs/data.md) for the dataset list and known gaps.
 ```sh
 # Simulate one game from ratings as of the given week (stats through the week before)
 uv run nflsim simulate --home KC --away BUF --season 2025 --week 12 --n 10000 --seed 42
+#   --spread -3.5 --total 47.5   cover/over chances (default: the schedule's lines)
+#   --out "Name" --compare       what-if: a player out, with and without
+#   --players                    per-player stat lines with ranges
+#   --json                       everything as JSON
+
+# Every game of a week in one table (model vs. Vegas line, cover and over chances)
+uv run nflsim week --season 2026 --week 11
 
 # Walk-forward backtest: fit on earlier seasons, predict each test season
 uv run nflsim backtest --seasons 2021-2024 --n 10000 --seed 42

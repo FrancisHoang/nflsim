@@ -21,6 +21,7 @@ from nflsim.data import (
     dropbacks,
     id_coverage,
     injury_reports,
+    normalize_teams,
     parse_seasons,
     pfr_team_pressure,
     player_snaps,
@@ -52,6 +53,7 @@ from nflsim.pipeline import (
     load_games_with_lineups,
     load_lineups,
     predict_matchup,
+    predict_week,
 )
 from nflsim.player_eval import evaluate_injury_usage, evaluate_ratings, evaluate_usage
 from nflsim.stat_eval import baseline_per_game, evaluate_stat_lines
@@ -62,6 +64,7 @@ from nflsim.summary import (
     line_dict,
     quantile_dict,
     records,
+    week_frame,
 )
 from nflsim.tuning import current_params, evaluate, evaluate_holdout, grid
 
@@ -320,14 +323,7 @@ def simulate(
         )
     if requested or players:
         injuries = True  # both act through the injury-aware lineup
-    if injuries is not None:
-        features = settings.model.features
-        if injuries:
-            features = (*features, *[f for f in PLAYER_FEATURES if f not in features])
-        model_cfg = settings.model.model_copy(
-            update={"injury_aware": injuries, "features": features}
-        )
-        settings = settings.model_copy(update={"model": model_cfg})
+    settings = _injury_settings(settings, injuries)
     cache = DataCache(settings.data, offline=offline)
     effects = None
     base = None
@@ -451,7 +447,10 @@ def _result_dict(r: MatchupResult) -> dict[str, object]:
 
 def _print_lines(lines: list[LineResult], r: MatchupResult) -> None:
     """Cover and over chances against each line (pushes counted separately)."""
-    typer.echo("\n  Lines (chances from the simulated scores; the lines are not a model input):")
+    typer.echo(
+        "\n  Lines (chances from the simulated scores; this game's own lines are not a model "
+        "input):"
+    )
     for x in lines:
         where = "given" if x.source == "given" else "nflverse line"
         push = f", push {x.push:.1%}" if x.push > 0 else ""
@@ -708,6 +707,168 @@ def _print_used(u: _Used, r: MatchupResult) -> None:
             f"  final score: {r.home} {h}, {r.away} {a} (already played; the ratings use "
             "only earlier weeks)"
         )
+
+
+def _injury_settings(settings: Settings, injuries: bool | None) -> Settings:
+    """``settings`` with injury-aware player features switched on or off (None: as is)."""
+    if injuries is None:
+        return settings
+    features = settings.model.features
+    if injuries:
+        features = (*features, *[f for f in PLAYER_FEATURES if f not in features])
+    model_cfg = settings.model.model_copy(update={"injury_aware": injuries, "features": features})
+    return settings.model_copy(update={"model": model_cfg})
+
+
+@app.command()
+def week(
+    season: Annotated[int, typer.Option(help="Season.")],
+    week: Annotated[int, typer.Option(help="Week (ratings use weeks before it).")],
+    n: Annotated[int, typer.Option(help="Simulations per game.", min=1)] = 10_000,
+    seed: Annotated[int, typer.Option(help="RNG seed (every game uses it, as simulate).")] = 42,
+    injuries: Annotated[
+        bool | None,
+        typer.Option(
+            "--injuries/--no-injuries",
+            help="Use the week's injury report (injury-aware player features). Default: config.",
+        ),
+    ] = None,
+    offline: Annotated[
+        bool,
+        typer.Option(help="Use cached data as it is; never download (stale data is used)."),
+    ] = False,
+    json_output: Annotated[
+        bool, typer.Option("--json", help="Print the full result as JSON instead of text.")
+    ] = False,
+    config: ConfigOption = None,
+) -> None:
+    """Simulate every scheduled game of a week and print them in one table.
+
+    Each game is simulated exactly as `simulate` would (same seed), with lines from the
+    nflverse schedule. For overrides or player stat lines, run `simulate` on the game.
+    """
+    settings = _injury_settings(load_settings(config), injuries)
+    cache = DataCache(settings.data, offline=offline)
+    try:
+        schedules = cache.load("schedules", [season])
+        games, lineup = load_games_with_lineups(cache, settings, season)
+        preds = predict_week(games, settings, season, week, n, seed, lineup)
+    except (ValueError, FileNotFoundError) as err:
+        raise typer.BadParameter(str(err)) from err
+    schedule = normalize_teams(
+        schedules.filter((pl.col("season") == season) & (pl.col("week") == week)),
+        ["home_team", "away_team"],
+    )
+    frame = week_frame(preds, schedule)
+    flags: dict[str, list[str]] = {}
+    for p in preds:
+        if p.result is not None:
+            label = f"{p.result.away}@{p.result.home}"
+            for flag in p.result.flags:
+                flags.setdefault(flag, []).append(label)
+    last, done = ratings_cutoff(schedules, season, week)
+    market = bool(set(settings.model.features) & set(MARKET_FEATURES))
+    injury_aware = lineup is not None
+
+    if json_output:
+        results = {p.game_id: p.result for p in preds}
+        payload = {
+            "season": season,
+            "week": week,
+            "simulation": {"n": n, "seed": seed},
+            "ratings_through_week": last,
+            "completed_games_before_week": done,
+            "injury_aware": injury_aware,
+            "market_strength": market,
+            "games": [
+                {
+                    **row,
+                    "result": _result_dict(r) if (r := results[row["game_id"]]) else None,
+                    "flags": r.flags if r else [],
+                }
+                for row in records(frame)
+            ],
+        }
+        typer.echo(json.dumps(payload, indent=2))
+        return
+
+    typer.echo(f"{season} week {week}: {frame.height} games ({n:,} simulations each, seed {seed})")
+    typer.echo(
+        "  Spreads are the home team's line (-3.5 = home favored by 3.5); cover and over are "
+        "the\n  model's chances against that game's Vegas line (nflverse; never a model input).\n"
+    )
+    typer.echo("  " + format_table(_week_cells(frame)).replace("\n", "\n  "))
+    for row in frame.filter(pl.col("error").is_not_null()).iter_rows(named=True):
+        typer.echo(f"  not simulated: {row['away']}@{row['home']}: {row['error']}")
+    if flags:
+        typer.echo("\n  Flags:")
+        everyone = sum(p.result is not None for p in preds)
+        for flag, labels in flags.items():
+            where = "all games" if len(labels) == everyone > 1 else ", ".join(labels)
+            typer.echo(f"  - {flag} ({where})")
+    through = f"through week {last}" if last is not None else "none yet (prior season only)"
+    typer.echo(f"\n  ratings: {season} games {through}; {done} completed before week {week}")
+    stamp = cached_at(cache, "pbp", season)
+    if stamp is not None:
+        mode = " (offline: not refreshed)" if cache.offline else ""
+        typer.echo(f"  play-by-play cached {stamp:%Y-%m-%d %H:%M}{mode}")
+    if market:
+        typer.echo(
+            f"  market strength: closing spreads of {season} games before week {week} "
+            "(never a game's own line)"
+        )
+    state = "on" if injury_aware else "off (use --injuries)"
+    typer.echo(f"  injury-aware: {state}")
+
+
+def _week_cells(frame: pl.DataFrame) -> pl.DataFrame:
+    """``week_frame`` as display strings."""
+
+    def pct(v: float | None) -> str:
+        return "" if v is None else f"{v:.1%}"
+
+    def line(team: str | None, v: float | None) -> str:
+        if v is None or team is None:
+            return ""
+        v = round(v, 1)
+        return f"{team} pk" if v == 0 else f"{team} {v:+.1f}"
+
+    def num(v: float | None) -> str:
+        return "" if v is None else f"{v:.1f}"
+
+    rows = list(frame.iter_rows(named=True))
+    return pl.DataFrame(
+        {
+            "kickoff": [r["kickoff"] or "" for r in rows],
+            "game": [f"{r['away']} @ {r['home']}" for r in rows],
+            "home win": [pct(r["home_win"]) for r in rows],
+            "model": [line(r["home"], r["model_spread"]) for r in rows],
+            "vegas": [line(r["home"], r["vegas_spread"]) for r in rows],
+            "home covers": [pct(r["home_cover"]) for r in rows],
+            "total": [num(r["model_total"]) for r in rows],
+            "vegas total": [num(r["vegas_total"]) for r in rows],
+            "over": [pct(r["over"]) for r in rows],
+            "final": [
+                f"{r['home_score']}-{r['away_score']}" if r["home_score"] is not None else ""
+                for r in rows
+            ],
+        },
+        schema={
+            c: pl.String
+            for c in (
+                "kickoff",
+                "game",
+                "home win",
+                "model",
+                "vegas",
+                "home covers",
+                "total",
+                "vegas total",
+                "over",
+                "final",
+            )
+        },
+    )
 
 
 @app.command()

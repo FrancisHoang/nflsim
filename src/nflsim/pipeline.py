@@ -419,6 +419,55 @@ def predict_matchup(
     )
 
 
+@dataclass(frozen=True)
+class WeekPrediction:
+    """One scheduled game of a week: its result, or why it could not be simulated."""
+
+    game_id: str
+    result: MatchupResult | None
+    error: str | None = None
+
+
+def predict_week(
+    games: pl.DataFrame,
+    settings: Settings,
+    season: int,
+    week: int,
+    n: int,
+    seed: int,
+    lineup: pl.DataFrame | None = None,
+) -> list[WeekPrediction]:
+    """Simulate every scheduled game of ``season`` week ``week`` in ``games``.
+
+    Each game is simulated exactly as ``predict_matchup`` would simulate it alone (its
+    row becomes the matchup row, and every game uses ``seed``), so a game's numbers match
+    ``simulate`` for that game. A game that cannot be simulated (e.g. no ratings) gets an
+    ``error`` instead of stopping the rest. Ordered by ``game_id``.
+    """
+    ids = (
+        games.filter((pl.col("season") == season) & (pl.col("week") == week))
+        .sort("game_id")["game_id"]
+        .to_list()
+    )
+    if not ids:
+        raise ValueError(f"no games scheduled in {season} week {week}")
+    out: list[WeekPrediction] = []
+    for game_id in ids:
+        relabeled = games.with_columns(
+            pl.when(pl.col("game_id") == game_id)
+            .then(pl.lit(MATCHUP_ID))
+            .otherwise(pl.col("game_id"))
+            .alias("game_id")
+        )
+        try:
+            result = predict_matchup(relabeled, settings, n, seed, lineup)
+        except ValueError as err:
+            out.append(WeekPrediction(game_id, None, str(err)))
+            continue
+        out.append(WeekPrediction(game_id, result))
+    return out
+
+
 def availability_report(
     cache: DataCache, lineup: pl.DataFrame, result: MatchupResult, min_share: float
 ) -> pl.DataFrame:
