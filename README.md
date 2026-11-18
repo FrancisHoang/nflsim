@@ -136,10 +136,17 @@ uv sync --extra dashboard
 uv run nflsim dashboard            # opens http://localhost:8501
 ```
 
-A Streamlit front end over the same functions as the CLI: the week page shows every
-game of a week with the model next to the Vegas line, the winners picked once games are
-played, a model-vs-Vegas line chart, and the flags and data behind the predictions. It
-reads the local data cache and never downloads (run `nflsim fetch` first).
+A Streamlit front end over the same functions as the CLI, so it shows the same numbers
+for the same seed. It reads the local data cache and never downloads (run `nflsim fetch`
+first).
+
+- **Week:** every game of a week with the model next to the Vegas line, the winners
+  picked once games are played, a model-vs-Vegas line chart, and the flags and data
+  behind the predictions (`nflsim week`).
+- **Game:** one game in depth (`nflsim simulate`): win chances, the distribution of final
+  margins against the Vegas line, score ranges, cover and over chances (also against your
+  own line), what-ifs (rule a player out or make him doubtful, compared with the same
+  seed), players who may not play, and per-player stat lines.
 
 Every simulation takes an explicit seed. To use player ratings and injury reports, pass a
 config with the player features and `injury_aware = true` under `[model]`; `simulate`
