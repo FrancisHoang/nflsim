@@ -90,12 +90,13 @@ def load_games_with_lineups(
     pbp = cache.scan("pbp", seasons)
     schedules = cache.load("schedules", seasons)
     if extra is not None:
-        schedules = pl.concat([schedules, extra], how="diagonal_relaxed")
+        schedules = pl.concat([schedules, home_roof(extra, schedules)], how="diagonal_relaxed")
     team_games = team_game_stats(pbp, settings.ratings)
     players = lineup = None
     if any(f in PLAYER_FEATURES for f in settings.model.features):
         players, lineup = load_player_features(cache, settings, seasons, schedules)
-    return build_games(schedules, team_games, settings.ratings, players), lineup
+    games = build_games(schedules, team_games, settings.ratings, players, settings.context)
+    return games, lineup
 
 
 def load_player_features(
@@ -182,6 +183,35 @@ def load_lineups(
         rated, available, depth_ranks(depth), settings.injuries, settings.player_ratings
     )
     return rated, lineup
+
+
+def home_roof(extra: pl.DataFrame, schedules: pl.DataFrame) -> pl.DataFrame:
+    """Fill a hypothetical game's missing ``roof`` from the home team's latest home game.
+
+    Sets ``roof_inferred`` on the rows filled this way. Neutral-site games are left
+    unknown (treated as outdoors), since the stadium is not the home team's.
+    """
+    if "roof" in extra.columns and extra["roof"].null_count() == 0:
+        return extra
+    sched = normalize_teams(schedules, ["home_team", "away_team"])
+    latest = (
+        sched.filter((pl.col("location") == "Home") & pl.col("roof").is_not_null())
+        .sort("season", "week")
+        .group_by("home_team")
+        .agg(pl.col("roof").last().alias("_roof"))
+    )
+    base = extra if "roof" in extra.columns else extra.with_columns(roof=pl.lit(None, pl.String))
+    filled = base.join(latest, on="home_team", how="left").with_columns(
+        roof_inferred=pl.col("roof").is_null()
+        & pl.col("_roof").is_not_null()
+        & (pl.col("location") != "Neutral")
+    )
+    return filled.with_columns(
+        pl.when(pl.col("roof_inferred"))
+        .then(pl.col("_roof"))
+        .otherwise(pl.col("roof"))
+        .alias("roof")
+    ).drop("_roof")
 
 
 def matchup_row(season: int, week: int, home: str, away: str, neutral: bool) -> pl.DataFrame:
@@ -294,6 +324,18 @@ def predict_matchup(
                 f"{name}: no usage projection for {missing} player role(s) "
                 "(no roster or no history); those use the league average"
             )
+
+    used = set(settings.model.features)
+    if used & {"rest", "opp_rest"} and info.get("rest_missing"):
+        flags.append("rest days unknown for this game; both teams assumed on normal rest")
+    if used & {"indoor", "wind"}:
+        roof = info.get("roof")
+        if roof is None:
+            flags.append("roof unknown (neutral site or no home games cached); assumed outdoors")
+        elif info.get("roof_inferred"):
+            flags.append(f"roof ({roof}) taken from {info['home_team']}'s latest home game")
+    if "wind" in used and info.get("wind_missing"):
+        flags.append("wind unknown for this outdoor game; using the average outdoor wind")
 
     model = fit_points_model(train, settings.model)
     runs = availability_runs(row, model, lineup, settings, n, seed)

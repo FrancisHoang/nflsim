@@ -65,9 +65,15 @@ PointsFeature = Literal[
     "off_qb",
     "off_rush",
     "off_recv",
+    "rest",
+    "opp_rest",
+    "indoor",
+    "wind",
 ]
 # Features built from player ratings (Phase 2) rather than team ratings.
 PLAYER_FEATURES: tuple[PointsFeature, ...] = ("off_qb", "off_rush", "off_recv")
+# Game context from the schedule (Phase 6).
+CONTEXT_FEATURES: tuple[PointsFeature, ...] = ("rest", "opp_rest", "indoor", "wind")
 
 
 class ModelConfig(BaseModel):
@@ -82,6 +88,8 @@ class ModelConfig(BaseModel):
         "def_success",
         "off_pace",
         "def_pace",
+        "indoor",
+        "wind",
     )
     train_seasons: int = Field(default=5, ge=1)
     min_expected_points: float = Field(default=3.0, gt=0)
@@ -89,6 +97,12 @@ class ModelConfig(BaseModel):
     # "direct": margin fit by its own regression on home-minus-away features; the total
     # still comes from the points model.
     margin_fit: Literal["points", "direct"] = "points"
+    # Home field (Phase 6). Default: one constant fit on all training seasons. Otherwise
+    # each season gets its own home value and they are averaged with these weights:
+    # excluded seasons count 0 (e.g. 2020, mostly played without fans), and a half-life
+    # in seasons favors recent ones.
+    home_exclude_seasons: tuple[int, ...] = ()
+    home_half_life_seasons: float | None = Field(default=None, gt=0)
     # Player features (off_qb, off_rush, off_recv) from injury-aware lineups (Phase 3):
     # expected usage given each player's play probability, backups moving up.
     injury_aware: bool = False
@@ -262,6 +276,20 @@ class MatchupsConfig(BaseModel):
         return self
 
 
+class ContextConfig(BaseModel):
+    """Game context features from the schedule (Phase 6)."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    # rest / opp_rest: days since the team's last game minus normal_rest_days, clipped to
+    # +/- rest_cap_days (a bye and a season opener count the same).
+    normal_rest_days: float = Field(default=7.0, gt=0)
+    rest_cap_days: float = Field(default=7.0, gt=0)
+    # Recorded wind above this is capped: a few readings (71, 44 mph) look like gusts or
+    # errors, and the effect on scoring levels off above ~20 mph.
+    wind_cap_mph: float = Field(default=30.0, gt=0)
+
+
 class BacktestConfig(BaseModel):
     """Walk-forward backtest settings."""
 
@@ -303,6 +331,7 @@ class Settings(BaseModel):
     player_ratings: PlayerRatingsConfig = PlayerRatingsConfig()
     injuries: InjuriesConfig = InjuriesConfig()
     matchups: MatchupsConfig = MatchupsConfig()
+    context: ContextConfig = ContextConfig()
     sim: SimConfig = SimConfig()
     backtest: BacktestConfig = BacktestConfig()
     tuning: TuningConfig = TuningConfig()

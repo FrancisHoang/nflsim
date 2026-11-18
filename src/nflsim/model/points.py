@@ -23,7 +23,12 @@ import numpy as np
 import numpy.typing as npt
 import polars as pl
 
-from nflsim.config import PLAYER_FEATURES, ModelConfig, RatingsConfig
+from nflsim.config import (
+    PLAYER_FEATURES,
+    ContextConfig,
+    ModelConfig,
+    RatingsConfig,
+)
 from nflsim.data.teams import normalize_teams
 from nflsim.model.ratings import RATING_COLUMNS, ratings_as_of
 
@@ -87,6 +92,7 @@ def build_games(
     team_games: pl.DataFrame,
     ratings_config: RatingsConfig,
     player_features: pl.DataFrame | None = None,
+    context: ContextConfig | None = None,
 ) -> pl.DataFrame:
     """One row per scheduled game with both teams' pre-game ratings attached.
 
@@ -98,6 +104,9 @@ def build_games(
     (and ``injury_report`` when the features are injury-aware).
     A team with no row gets 0 (league average) for each and every role counted as
     missing; this does not affect ``has_ratings``.
+
+    Context columns (``context_columns``): ``h_rest``/``a_rest``, ``indoor``, ``wind``,
+    ``rest_missing``, ``wind_missing``, ``roof`` and ``roof_inferred``.
     """
     sched = normalize_teams(schedules, ["home_team", "away_team"]).cast(
         {"season": pl.Int32, "week": pl.Int32}
@@ -158,11 +167,82 @@ def build_games(
             how="left",
         )
         .join(league_points_as_of(sched), on=["season", "week"], how="left")
+        .join(context_columns(sched, context or ContextConfig()), on="game_id", how="left")
     )
     needed = [f"{p}{c}" for p in ("h_", "a_") for c in _RATING_FIELDS] + ["league_ppg"]
     return games.with_columns(
         pl.all_horizontal(pl.col(needed).is_not_null()).alias("has_ratings")
     ).sort("season", "week", "game_id")
+
+
+def _schedule_col(sched: pl.DataFrame, name: str, dtype: type[pl.DataType]) -> pl.Expr:
+    """A schedule column, or nulls when the schedule does not have it."""
+    if name in sched.columns:
+        return pl.col(name).cast(dtype)
+    return pl.lit(None, dtype)
+
+
+def context_columns(sched: pl.DataFrame, config: ContextConfig) -> pl.DataFrame:
+    """Per game: rest relative to normal for each side, indoor flag and outdoor wind.
+
+    ``h_rest``/``a_rest``: days of rest minus ``normal_rest_days``, clipped to
+    ``+/- rest_cap_days``; 0 when unknown (``rest_missing``). ``indoor``: 1 for dome or
+    closed roof. ``wind``: mph at kickoff outdoors (capped at ``wind_cap_mph``), 0 indoors;
+    missing outdoor wind uses
+    the mean outdoor wind of earlier seasons (of all known games if there are none) and
+    sets ``wind_missing``.
+    """
+    cap, normal = config.rest_cap_days, config.normal_rest_days
+    roof = _schedule_col(sched, "roof", pl.String)
+    frame = sched.select(
+        "game_id",
+        "season",
+        *[
+            ((_schedule_col(sched, f"{side}_rest", pl.Float64) - normal).clip(-cap, cap)).alias(
+                f"{p}rest"
+            )
+            for side, p in (("home", "h_"), ("away", "a_"))
+        ],
+        roof.alias("roof"),
+        _schedule_col(sched, "roof_inferred", pl.Boolean).fill_null(False).alias("roof_inferred"),
+        roof.is_in(["dome", "closed"]).fill_null(False).alias("_indoor"),
+        _schedule_col(sched, "wind", pl.Float64)
+        .clip(upper_bound=config.wind_cap_mph)
+        .alias("_wind"),
+    )
+    outdoor_known = frame.filter(~pl.col("_indoor") & pl.col("_wind").is_not_null())
+    overall = outdoor_known["_wind"].mean()
+    by_season = (
+        outdoor_known.group_by("season")
+        .agg(pl.col("_wind").sum().alias("s"), pl.len().alias("n"))
+        .sort("season")
+        .with_columns(
+            (pl.col("s").cum_sum().shift(1) / pl.col("n").cum_sum().shift(1)).alias("_fill")
+        )
+        .select("season", "_fill")
+    )
+    missing_wind = ~pl.col("_indoor") & pl.col("_wind").is_null()
+    return (
+        frame.join(by_season, on="season", how="left")
+        .with_columns(
+            pl.col("_fill").fill_null(pl.lit(overall, pl.Float64)),
+            (pl.col("h_rest").is_null() | pl.col("a_rest").is_null()).alias("rest_missing"),
+        )
+        .select(
+            "game_id",
+            pl.col("h_rest").fill_null(0.0),
+            pl.col("a_rest").fill_null(0.0),
+            pl.col("_indoor").cast(pl.Float64).alias("indoor"),
+            pl.when(pl.col("_indoor"))
+            .then(0.0)
+            .otherwise(pl.coalesce("_wind", "_fill", pl.lit(0.0)))
+            .alias("wind"),
+            "rest_missing",
+            missing_wind.alias("wind_missing"),
+            "roof",
+            "roof_inferred",
+        )
+    )
 
 
 def _features(offense: str, defense: str) -> dict[str, pl.Expr]:
@@ -180,6 +260,11 @@ def _features(offense: str, defense: str) -> dict[str, pl.Expr]:
         "def_pace": dev(defense, "pace", "pace"),
         # Player-based ratings are already deviations from the league role average.
         **{f: pl.col(f"{offense}{f}") for f in PLAYER_FEATURES},
+        # Context (Phase 6): own and opponent rest; indoor and wind are the same for both.
+        "rest": pl.col(f"{offense}rest"),
+        "opp_rest": pl.col(f"{defense}rest"),
+        "indoor": pl.col("indoor"),
+        "wind": pl.col("wind"),
     }
 
 
@@ -271,6 +356,31 @@ def _with_runs(
     return out
 
 
+def _home_columns(train: pl.DataFrame, config: ModelConfig) -> tuple[FloatArray, FloatArray]:
+    """Home-field regressors for the training games and the weights that combine their
+    coefficients into one home value.
+
+    By default a single ``home_sign`` column (one constant home value). With
+    ``home_exclude_seasons`` or ``home_half_life_seasons`` each training season gets its
+    own home column, and the home value is the weighted mean of the season coefficients:
+    excluded seasons weigh 0, and with a half-life a season ``k`` seasons before the
+    latest training season weighs ``0.5 ** (k / half_life)``.
+    """
+    sign = train["home_sign"].to_numpy().astype(np.float64)
+    if not config.home_exclude_seasons and config.home_half_life_seasons is None:
+        return sign[:, None], np.ones(1)
+    seasons = train["season"].to_numpy()
+    unique = np.unique(seasons)
+    cols = np.column_stack([sign * (seasons == s) for s in unique])
+    age = unique.max() - unique
+    half_life = config.home_half_life_seasons
+    weights = np.ones(unique.size) if half_life is None else 0.5 ** (age / half_life)
+    weights[np.isin(unique, config.home_exclude_seasons)] = 0.0
+    if weights.sum() == 0:
+        raise ValueError("home_exclude_seasons leaves no training season for home field")
+    return cols, weights / weights.sum()
+
+
 def fit_points_model(games: pl.DataFrame, config: ModelConfig) -> PointsModel:
     """Least-squares fit of points on rating features, plus negative-binomial dispersion.
 
@@ -287,15 +397,16 @@ def fit_points_model(games: pl.DataFrame, config: ModelConfig) -> PointsModel:
         raise ValueError(f"only {train.height} games to fit {len(features) + 2} coefficients")
 
     x_home, x_away = design_matrices(train, features)
-    sign = train["home_sign"].to_numpy().astype(np.float64)
+    home_cols, home_weights = _home_columns(train, config)
     league = train["league_ppg"].to_numpy().astype(np.float64)
     ones = np.ones(train.height)
     x = np.vstack(
         [
-            np.column_stack([ones, x_home, sign]),
-            np.column_stack([ones, x_away, -sign]),
+            np.column_stack([ones, x_home, home_cols]),
+            np.column_stack([ones, x_away, -home_cols]),
         ]
     )
+    n_feat = len(features)
     points = np.concatenate(
         [train["home_score"].to_numpy(), train["away_score"].to_numpy()]
     ).astype(np.float64)
@@ -305,21 +416,21 @@ def fit_points_model(games: pl.DataFrame, config: ModelConfig) -> PointsModel:
     model = PointsModel(
         features=features,
         intercept=float(beta[0]),
-        coefs=tuple(float(b) for b in beta[1:-1]),
-        home=float(beta[-1]),
+        coefs=tuple(float(b) for b in beta[1 : 1 + n_feat]),
+        home=float(beta[1 + n_feat :] @ home_weights),
         dispersion=1.0,  # placeholder until the final means are known
         min_expected_points=config.min_expected_points,
         train_games=train.height,
     )
     if config.margin_fit == "direct":
         # No intercept: swapping home and away must flip the sign of the margin.
-        xm = np.column_stack([x_home - x_away, sign])
+        xm = np.column_stack([x_home - x_away, home_cols])
         margin = (train["home_score"] - train["away_score"]).to_numpy().astype(np.float64)
         gamma, *_ = np.linalg.lstsq(xm, margin, rcond=None)
         model = replace(
             model,
-            margin_coefs=tuple(float(g) for g in gamma[:-1]),
-            margin_home=float(gamma[-1]),
+            margin_coefs=tuple(float(g) for g in gamma[:n_feat]),
+            margin_home=float(gamma[n_feat:] @ home_weights),
         )
 
     # Dispersion of actual points around the model's final expected points.

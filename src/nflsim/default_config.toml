@@ -37,9 +37,14 @@ carryover = 0.5
 #   def_epa, def_success, def_pace: the opponent's defense (EPA/success allowed) and pace
 #   off_qb, off_rush, off_recv: the scoring team's offense built from player ratings
 #     (projected usage x player EPA rating minus league role average; [player_ratings]).
+#   rest, opp_rest, indoor, wind: game context ([context]).
 #     Backtest 2021-2024 (2026-11-17): adding them leaves Brier unchanged (+0.0001) and
 #     replacing off_epa/off_success with them is worse (+0.0022), so they are off by default.
-features = ["off_epa", "def_epa", "off_success", "def_success", "off_pace", "def_pace"]
+# Context (Phase 6, 2026-11-17): adding indoor and wind lowers total MAE 10.69 -> 10.61
+# (95% CI [-0.20, +0.03]), better in 3 of 4 seasons, with win probability unchanged
+# (Brier 0.2254 both). That meets the rule set before testing, so they are on by default;
+# rest/opp_rest showed nothing (Brier +0.0001) and stay off.
+features = ["off_epa", "def_epa", "off_success", "def_success", "off_pace", "def_pace", "indoor", "wind"]
 # Number of seasons before the predicted season used to fit the coefficients.
 train_seasons = 5
 # Expected points are floored here so the score distribution stays valid.
@@ -50,6 +55,12 @@ min_expected_points = 3.0
 #             and home field. The points model still sets the expected total. The points
 #             model leaves out effects between the two sides, which narrows its margins.
 margin_fit = "points"
+# Home field (Phase 6). By default one constant home value is fit on all training
+# seasons. home_exclude_seasons gives the listed seasons their own home value, left out of
+# the one used to predict (e.g. [2020]: mostly no fans). home_half_life_seasons (uncomment
+# to use) averages per-season home values, halving the weight every N seasons back.
+home_exclude_seasons = []
+# home_half_life_seasons = 2.0
 # Build the player features from injury-aware lineups (Phase 3): each projected player's
 # chance to play from the final injury report, with backups moving up when he is out
 # ([injuries]). Needs injuries, depth_charts and snap_counts cached. Team-weeks with no
@@ -129,6 +140,19 @@ questionable_position_adjustment = { QB = -0.15 }
 # Separate offense/defense strengths were mixed on the holdout, so they are shared.
 prior_dropbacks = { pressure = 400.0, epa_pressured = 400.0, epa_clean = 800.0, epa = 400.0 }
 carryover = 0.5
+
+[context]
+# Game context features (Phase 6), from the schedule:
+#   rest / opp_rest: days since the team's (opponent's) last game minus normal_rest_days,
+#     clipped to +/- rest_cap_days;
+#   indoor: 1 for dome or closed-roof games (moves both teams' points, i.e. the total);
+#   wind: mph at kickoff for outdoor games, 0 indoors. Missing outdoor wind uses the
+#     average outdoor wind of earlier seasons and is flagged (wind_missing).
+normal_rest_days = 7.0
+rest_cap_days = 7.0
+# Recorded wind above this is capped (a few readings, e.g. 71 and 44 mph, look like gusts
+# or errors; the effect on scoring levels off above ~20 mph).
+wind_cap_mph = 30.0
 
 [sim]
 # Points added to the winner when a simulated game ends tied (overtime, usually a field goal).
