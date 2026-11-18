@@ -9,7 +9,7 @@ import polars as pl
 import typer
 
 from nflsim.backtest import calibration, format_table, summarize, walk_forward
-from nflsim.config import load_settings
+from nflsim.config import PLAYER_FEATURES, load_settings
 from nflsim.data import (
     DATASETS,
     PBP_PLAYER_COLUMNS,
@@ -103,6 +103,13 @@ def backtest(
         str | None,
         typer.Option(help="How the margin is fit: 'points' or 'direct' (default: config)."),
     ] = None,
+    injuries: Annotated[
+        bool | None,
+        typer.Option(
+            "--injuries/--no-injuries",
+            help="Injury-aware player features (default: config model.injury_aware).",
+        ),
+    ] = None,
     output: Annotated[
         Path | None, typer.Option(help="Write per-game predictions to this parquet file.")
     ] = None,
@@ -115,6 +122,8 @@ def backtest(
         overrides["features"] = tuple(f.strip() for f in features.split(",") if f.strip())
     if margin_fit is not None:
         overrides["margin_fit"] = margin_fit
+    if injuries is not None:
+        overrides["injury_aware"] = injuries
     if overrides:
         model_cfg = settings.model.model_validate({**settings.model.model_dump(), **overrides})
         settings = settings.model_copy(update={"model": model_cfg})
@@ -124,6 +133,8 @@ def backtest(
 
     typer.echo(f"features: {', '.join(settings.model.features) or '(none)'}")
     typer.echo(f"margin fit: {settings.model.margin_fit}")
+    if set(settings.model.features) & set(PLAYER_FEATURES):
+        typer.echo(f"injury-aware player features: {settings.model.injury_aware}")
     typer.echo(f"simulations per game: {n:,}, seed: {seed}\n")
     for fit in fits:
         m = fit.model

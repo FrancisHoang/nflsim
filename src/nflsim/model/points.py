@@ -94,7 +94,8 @@ def build_games(
     ``home_sign``, ``league_ppg``, ``h_*``/``a_*`` ratings and prior flags, and
     ``has_ratings`` (False when any rating is missing, e.g. week 1 of the first cached
     season). ``player_features`` (from ``team_player_features``, keyed by season, week,
-    team) adds ``h_*``/``a_*`` player-based offense columns and ``player_proj_missing``.
+    team) adds ``h_*``/``a_*`` player-based offense columns and ``player_proj_missing``
+    (and ``injury_report`` when the features are injury-aware).
     A team with no row gets 0 (league average) for each and every role counted as
     missing; this does not affect ``has_ratings``.
     """
@@ -111,9 +112,10 @@ def build_games(
         "season", "week", "team", *_RATING_FIELDS, "games_played", "prior_source"
     )
     if player_features is not None:
+        extra = [c for c in ("injury_report",) if c in player_features.columns]
         ratings = ratings.join(
             player_features.select(
-                "season", "week", "team", *PLAYER_FEATURES, "player_proj_missing"
+                "season", "week", "team", *PLAYER_FEATURES, "player_proj_missing", *extra
             ).cast({"season": pl.Int32, "week": pl.Int32}),
             on=["season", "week", "team"],
             how="left",

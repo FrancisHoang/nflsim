@@ -23,7 +23,13 @@ from nflsim.model import (
     simulate_scores,
     team_game_stats,
 )
-from nflsim.model.availability import depth_ranks, lineups, player_availability
+from nflsim.model.availability import (
+    depth_ranks,
+    expected_role_values,
+    lineups,
+    player_availability,
+    role_features,
+)
 from nflsim.model.players import player_game_stats, rated_usage, team_player_features
 
 MATCHUP_ID = "SIM"
@@ -51,13 +57,40 @@ def load_games(
 def load_player_features(
     cache: DataCache, settings: Settings, seasons: list[int], schedules: pl.DataFrame
 ) -> pl.DataFrame:
-    """Player-based team offense ratings (``team_player_features``) for each scheduled team."""
+    """Player-based team offense ratings for each scheduled team.
+
+    The Phase 2 projection (``team_player_features``), or with ``model.injury_aware``
+    injury-aware lineups (``injury_aware_features``).
+    """
     rosters = roster_weeks(cache.load("rosters_weekly", seasons), cache.load("players"))
     player_games, role_totals = player_game_stats(
         cache.scan("pbp", seasons), rosters, settings.ratings
     )
-    return team_player_features(
-        player_games, role_totals, rosters, schedule_targets(schedules), settings.player_ratings
+    targets = schedule_targets(schedules)
+    if not settings.model.injury_aware:
+        return team_player_features(
+            player_games, role_totals, rosters, targets, settings.player_ratings
+        )
+    rated, lineup = load_lineups(
+        cache, settings, seasons, targets, player_games, role_totals, rosters
+    )
+    reports = injury_reports(cache.load("injuries", seasons))
+    return injury_aware_features(targets, rated, lineup, reports)
+
+
+def injury_aware_features(
+    targets: pl.DataFrame, rated: pl.DataFrame, lineup: pl.DataFrame, reports: pl.DataFrame
+) -> pl.DataFrame:
+    """Player features from the expected values of injury-aware lineups (``load_lineups``),
+    plus ``injury_report``: whether the team has an injury report that week."""
+    reported = (
+        reports.select(pl.col("season").cast(pl.Int32), pl.col("week").cast(pl.Int32), "team")
+        .unique()
+        .with_columns(injury_report=pl.lit(True))
+    )
+    features = role_features(targets, expected_role_values(lineup), rated)
+    return features.join(reported, on=["season", "week", "team"], how="left").with_columns(
+        pl.col("injury_report").fill_null(False)
     )
 
 
@@ -193,6 +226,11 @@ def predict_matchup(games: pl.DataFrame, settings: Settings, n: int, seed: int) 
             flags.append(f"{name}: previous season not cached; prior is league average")
         if info[f"{prefix}games_played"] == 0:
             flags.append(f"{name}: no games yet this season; rating is the prior only")
+        if info.get(f"{prefix}injury_report") is False:
+            flags.append(
+                f"{name}: no injury report for week {info['week']}; "
+                "everyone treated as not on the report"
+            )
         missing = info.get(f"{prefix}player_proj_missing")
         if missing:
             flags.append(

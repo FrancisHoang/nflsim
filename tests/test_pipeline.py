@@ -65,3 +65,13 @@ def test_predict_matchup_rejects_unknown_abbreviation() -> None:
     games = with_matchup(season_games(range(2019, 2022)), home_team="XYZ")
     with pytest.raises(ValueError, match="unknown team"):
         predict_matchup(games, SETTINGS, n=100, seed=0)
+
+
+def test_predict_matchup_flags_missing_injury_report() -> None:
+    games = with_matchup(
+        season_games(range(2019, 2022)), h_injury_report=True, a_injury_report=False
+    )
+    result = predict_matchup(games, SETTINGS, n=200, seed=1)
+    report_flags = [f for f in result.flags if "no injury report" in f]
+    assert len(report_flags) == 1
+    assert report_flags[0].startswith(result.away)

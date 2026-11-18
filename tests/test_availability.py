@@ -328,3 +328,22 @@ def test_evaluate_injury_usage_rewards_known_absence() -> None:
     assert row["top_injuries"] == 1.0 and row["top_phase2"] == 0.0
     rb = result.filter((pl.col("role") == "carry") & (pl.col("subset") == "all")).row(0, named=True)
     assert rb["se_phase2"] == pytest.approx(0.0) and rb["se_injuries"] == pytest.approx(0.0)
+
+
+def test_injury_aware_features_marks_report_and_matches_lineup_values() -> None:
+    from nflsim.pipeline import injury_aware_features
+
+    targets = pl.DataFrame(
+        {"season": [2024, 2024], "week": [5, 5], "team": ["KC", "BUF"]}
+    ).with_columns(pl.col("season", "week").cast(pl.Int32))
+    lineup = lineups(RATED, QB1_OUT, RANKS, INJ, PR)
+    # Reports come back with float season/week from the cache.
+    reports = pl.DataFrame({"season": [2024.0], "week": [5.0], "team": ["KC"]})
+    feats = injury_aware_features(targets, RATED, lineup, reports)
+    kc = feats.filter(pl.col("team") == "KC").row(0, named=True)
+    buf = feats.filter(pl.col("team") == "BUF").row(0, named=True)
+    assert kc["injury_report"] is True
+    assert buf["injury_report"] is False
+    assert buf["player_proj_missing"] == 3  # no players projected at all
+    expected = role_features(targets, expected_role_values(lineup), RATED)
+    assert kc["off_qb"] == pytest.approx(expected.filter(pl.col("team") == "KC")["off_qb"][0])
