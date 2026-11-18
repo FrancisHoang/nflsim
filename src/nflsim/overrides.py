@@ -70,7 +70,13 @@ def week_roster(
         frames.append(own.filter(pl.col("week") == latest))
     if not frames:
         raise ValueError(f"no {season} roster for {' or '.join(teams)} up to week {week}")
-    return pl.concat(frames).select("gsis_id", "name", "team", "position").unique("gsis_id")
+    # Sorted so messages (e.g. ambiguous candidates) come out in the same order every run.
+    return (
+        pl.concat(frames)
+        .select("gsis_id", "name", "team", "position")
+        .unique("gsis_id")
+        .sort("team", "name", "gsis_id")
+    )
 
 
 def resolve(overrides: list[Override], roster: pl.DataFrame) -> list[ResolvedOverride]:
