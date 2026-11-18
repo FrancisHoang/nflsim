@@ -114,6 +114,22 @@ backup_order = "usage"
 # other regulars. Other positions are within about 0.1 and not adjusted.
 questionable_position_adjustment = { QB = -0.15 }
 
+[matchups]
+# Pass rush vs. pass protection ratings (Phase 4). From non-scramble dropbacks with known
+# pressure (sacks count as pressure). Each rating is the team's deviation from the same
+# season's league average (the pressure definition changes between seasons), using weeks
+# before W only, shrunk toward carryover x last season's deviation with this strength in
+# dropbacks: pressure counts all dropbacks, epa_pressured pressured ones, epa_clean clean ones.
+# Chosen on 2018-2022 by out-of-sample skill at predicting each team-game's deviation
+# (`nflsim matchup-eval`; 1 - MSE / MSE of the league average), checked on 2023-2025
+# (2026-11-17). Skill tune / holdout, offense then defense:
+#   pressure       0.086 / 0.044 and 0.013 / 0.030
+#   epa_pressured  0.014 / 0.008 and 0.002 / -0.006
+#   epa_clean      0.029 / 0.041 and 0.007 / 0.008
+# Separate offense/defense strengths were mixed on the holdout, so they are shared.
+prior_dropbacks = { pressure = 400.0, epa_pressured = 400.0, epa_clean = 800.0 }
+carryover = 0.5
+
 [sim]
 # Points added to the winner when a simulated game ends tied (overtime, usually a field goal).
 # The overtime winner is drawn with probability proportional to each team's expected points.
