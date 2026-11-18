@@ -187,6 +187,12 @@ class InjuriesConfig(BaseModel):
         "none": {"dnp": 0.74, "limited": 0.86, "full": 0.89, "none": 0.89},
     }
     unlisted_regular: float = Field(default=0.97, ge=0, le=1)
+    # Rostered non-regulars not on the report (backups): assumed available if needed.
+    unlisted_other: float = Field(default=1.0, ge=0, le=1)
+    # Order of players within a team's position when a player is out and everyone below
+    # moves up: "usage" (projected usage first, depth chart breaks ties, e.g. between
+    # backup QBs with no recent snaps) or "depth" (depth chart first).
+    backup_order: Literal["depth", "usage"] = "usage"
     # Added to the play probability of questionable players at these report positions
     # (result clipped to [0, 1]). Questionable QBs sit far more often than other players.
     questionable_position_adjustment: dict[str, float] = {"QB": -0.15}

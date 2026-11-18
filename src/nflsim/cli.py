@@ -31,8 +31,8 @@ from nflsim.injury_eval import (
     report_outcomes,
 )
 from nflsim.model.players import player_game_stats, usage_history
-from nflsim.pipeline import load_games, matchup_row, predict_matchup
-from nflsim.player_eval import evaluate_ratings, evaluate_usage
+from nflsim.pipeline import load_games, load_lineups, matchup_row, predict_matchup
+from nflsim.player_eval import evaluate_injury_usage, evaluate_ratings, evaluate_usage
 from nflsim.tuning import current_params, evaluate, evaluate_holdout, grid
 
 app = typer.Typer(help="Monte Carlo NFL game simulator.", no_args_is_help=True)
@@ -356,6 +356,19 @@ def injury_eval(
 @app.command("player-eval")
 def player_eval(
     seasons: Annotated[str, typer.Option(help="Test seasons, e.g. '2018-2024'.")] = "2018-2024",
+    injuries: Annotated[
+        bool,
+        typer.Option(help="Also compare injury-aware usage (needs injuries, depth charts)."),
+    ] = False,
+    affected_share: Annotated[
+        float,
+        typer.Option(
+            help="With --injuries: a team-week counts as affected when a player with at "
+            "least this healthy share may not play.",
+            min=0.0,
+            max=1.0,
+        ),
+    ] = 0.10,
     config: ConfigOption = None,
 ) -> None:
     """Check player ratings and projected usage against what happened, out of sample."""
@@ -381,3 +394,19 @@ def player_eval(
     usage = evaluate_usage(history, team_games, rosters, test_seasons, cfg)
     typer.echo("\nProjected usage vs. actual shares (total-variation distance; 0 = exact)")
     typer.echo(format_table(usage, [("no_projection", 4), ("tv_distance", 4)]))
+
+    if injuries:
+        targets = (
+            team_games.filter(pl.col("season").is_in(test_seasons))
+            .select("season", "week", "team")
+            .unique()
+        )
+        _, lineup = load_lineups(
+            cache, settings, test_seasons, targets, player_games, team_games, rosters
+        )
+        result = evaluate_injury_usage(history, lineup, test_seasons, affected_share)
+        typer.echo(
+            "\nUsage with injury reports vs. Phase 2 (tv: total-variation distance, lower is "
+            "better; top: projected top player had the most plays, higher is better)"
+        )
+        typer.echo(format_table(result, [(c, 4) for c in result.columns[3:]]))
