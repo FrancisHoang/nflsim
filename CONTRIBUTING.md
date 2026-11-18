@@ -28,3 +28,19 @@ test(cli): cover --refresh flag
 ```sh
 uv run ruff format . && uv run ruff check . && uv run mypy && uv run pytest
 ```
+
+## Merging
+
+- `main` is protected: changes land only through pull requests, and both CI checks
+  (Python 3.11 and 3.12) must pass with the branch up to date with `main`.
+- Pull requests are **rebase-merged**, so `main` keeps a linear history of the
+  individual conventional commits. Branches are deleted automatically after merging.
+- For stacked pull requests, retarget the child to `main` before merging the parent,
+  then rebase the child onto `main`.
+
+## Releases
+
+Each finished roadmap phase is a minor release (`v0.N.0`): bump the version in
+`pyproject.toml` and `src/nflsim/__init__.py`, run `uv lock`, add a `CHANGELOG.md`
+entry with the phase's backtest results, then tag the merged commit and publish a
+GitHub release.

@@ -1,5 +1,7 @@
 # nflsim
 
+[![CI](https://github.com/FrancisHoang/nflsim/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/FrancisHoang/nflsim/actions/workflows/ci.yml)
+
 A Monte Carlo NFL game simulator. Given two teams and a week, it simulates the game many
 times and reports win probability, score distributions, spread, total, and player stat
 lines, accounting for season stats, player matchups, and injuries on both rosters.
