@@ -24,4 +24,24 @@ also improve Brier on 2017-2024.
 
 ## Results
 
-(filled in after the run)
+`nflsim backtest --n 10000 --seed 42`, paired game bootstrap (5,000 resamples), benchmark =
+current default (Brier 0.2195, margin MAE 10.063 on 2021-2024; 0.2171 / 10.212 on
+2017-2024).
+
+| Half-life | Seasons | Brier diff (95% CI) | Margin MAE diff (95% CI) | Total MAE diff | Brier better |
+|---|---|---|---|---|---|
+| 4 weeks | 2021-2024 | +0.0007 [-0.0006, +0.0019] | +0.022 [-0.026, +0.070] | +0.014 | 2 of 4 |
+| 4 weeks | 2017-2024 | +0.0005 [-0.0006, +0.0017] | **+0.047 [+0.002, +0.091]** | +0.021 | 4 of 8 |
+| 8 weeks | 2021-2024 | +0.0001 [-0.0007, +0.0008] | +0.004 [-0.024, +0.031] | -0.001 | 2 of 4 |
+| 8 weeks | 2017-2024 | -0.0001 [-0.0007, +0.0006] | +0.020 [-0.006, +0.045] | -0.004 | 5 of 8 |
+
+**Gate: fail** for both. Neither improves Brier on 2021-2024 (both slightly worse, 2 of 4
+seasons); a 4-week half-life makes margin MAE significantly worse on 2017-2024. Default
+unchanged (equal weights); `half_life_weeks` stays as an option.
+
+## Why it does not help
+
+The shrinkage already balances signal and noise, and down-weighting old games mostly
+throws away sample: the team's true level changes less over a season than single-game
+EPA varies. The changes that do matter mid-season (a new quarterback) are now handled
+directly by `qb_change` and by market strength, which reacts each week.

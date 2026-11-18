@@ -146,19 +146,37 @@ def ratings_as_of(
     targets = targets.select("season", "week", "team").unique().sort("week")
 
     # This season's totals through week W-1: cumulative sums, then a strict as-of join.
+    # With a half-life, a game in week w counts 0.5 ** ((W - w) / h) for target week W:
+    # sums of x * 2 ** (w / h), scaled by 2 ** (-W / h) after the join.
+    half_life = config.half_life_weeks
+    growth = (
+        pl.lit(1.0)
+        if half_life is None
+        else pl.lit(2.0).pow(pl.col("week").cast(pl.Float64) / half_life)
+    )
     team_cum = (
         team_games.sort("season", "team", "week")
-        .select("season", "team", "week", pl.col(stats).cum_sum().over("season", "team"))
+        .select(
+            "season",
+            "team",
+            "week",
+            (pl.col(stats) * growth).cum_sum().over("season", "team"),
+            pl.col("games").cum_sum().over("season", "team").alias("raw_games"),
+        )
         .sort("week")
     )
-    current = targets.join_asof(
-        team_cum,
-        on="week",
-        by=["season", "team"],
-        strategy="backward",
-        allow_exact_matches=False,
-        check_sortedness=False,
-    ).with_columns(pl.col(stats).fill_null(0.0))
+    current = (
+        targets.join_asof(
+            team_cum,
+            on="week",
+            by=["season", "team"],
+            strategy="backward",
+            allow_exact_matches=False,
+            check_sortedness=False,
+        )
+        .with_columns(pl.col(stats).fill_null(0.0), pl.col("raw_games").fill_null(0.0))
+        .with_columns(pl.col(stats) / growth)
+    )
 
     # League totals use offense columns: every play is one team's offense, so the league's
     # offense and defense averages are identical.
@@ -253,7 +271,7 @@ def ratings_as_of(
         rated = _with_opponent_adjustment(rated, team_games, targets, config)
     return (
         rated.with_columns(
-            pl.col("games").cast(pl.Int64).alias("games_played"),
+            pl.col("raw_games").cast(pl.Int64).alias("games_played"),
             prior_source.alias("prior_source"),
         )
         .select(

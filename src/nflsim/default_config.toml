@@ -37,6 +37,12 @@ carryover = 0.5
 # (correlation 0.97-0.99 with unadjusted). Off.
 opponent_adjust = false
 opponent_prior_ridge = 1.0
+# Recency weighting (uncomment to use): a game in week w counts
+# 0.5 ** ((W - w) / half_life_weeks) when rating week W, in both the totals and the play
+# counts (so shrinkage sees the smaller effective sample). Off = all games equally.
+# Backtest 2021-2024 (2026-11-18): 4 weeks Brier +0.0007, 8 weeks +0.0001 (both n.s.,
+# 2 of 4 seasons); 4 weeks margin MAE worse on 2017-2024. Fails its gate (docs/recency.md).
+# half_life_weeks = 8.0
 
 [model]
 # Game-level points model (Phase 1). Each team's expected points are
