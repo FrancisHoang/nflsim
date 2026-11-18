@@ -314,3 +314,70 @@ def test_expected_points_with_per_run_player_features() -> None:
     # Run 1: the margin fit moves the margin by 40 * -0.15; the total drops by 6 as well.
     assert (d_h - d_a)[:, 1] == pytest.approx(flat_h - flat_a - 6.0)
     assert (d_h + d_a)[:, 1] == pytest.approx(flat_h + flat_a - 6.0)
+
+
+def two_season_games() -> pl.DataFrame:
+    """2019 with home field 3 points per team, 2020 with none (e.g. no fans)."""
+    a = synthetic_games(4000, {"intercept": 0.0, "home": 3.0, "off_epa": 30.0}, seed=11)
+    b = synthetic_games(4000, {"intercept": 0.0, "home": 0.0, "off_epa": 30.0}, seed=12)
+    return pl.concat(
+        [
+            a.with_columns(season=pl.lit(2019, pl.Int32)),
+            b.with_columns(season=pl.lit(2020, pl.Int32)),
+        ]
+    )
+
+
+def test_home_field_can_leave_out_or_down_weight_seasons() -> None:
+    games = two_season_games()
+    base = ModelConfig(features=("off_epa",))
+    pooled = fit_points_model(games, base)
+    assert pooled.home == pytest.approx(1.5, abs=0.3)  # one constant: the average
+    excluded = fit_points_model(games, base.model_copy(update={"home_exclude_seasons": (2020,)}))
+    assert excluded.home == pytest.approx(3.0, abs=0.3)
+    assert excluded.coefs[0] == pytest.approx(30.0, abs=3.0)  # other coefficients unchanged
+    # Half-life 1: the latest season (2020) weighs 1, 2019 weighs 0.5 -> (0 + 0.5*3) / 1.5.
+    recent = fit_points_model(games, base.model_copy(update={"home_half_life_seasons": 1.0}))
+    assert recent.home == pytest.approx(1.0, abs=0.3)
+    direct = fit_points_model(
+        games,
+        base.model_copy(update={"home_exclude_seasons": (2020,), "margin_fit": "direct"}),
+    )
+    assert direct.margin_home == pytest.approx(6.0, abs=0.6)  # margin = 2 x per-team home
+    with pytest.raises(ValueError, match="no training season"):
+        fit_points_model(games, base.model_copy(update={"home_exclude_seasons": (2019, 2020)}))
+
+
+def test_context_columns_rest_indoor_and_wind() -> None:
+    from nflsim.config import ContextConfig
+    from nflsim.model.points import context_columns
+
+    sched = pl.DataFrame(
+        {
+            "game_id": ["a", "b", "c", "d", "e"],
+            "season": [2019, 2019, 2020, 2020, 2020],
+            "home_rest": [7, 14, 4, None, 7],
+            "away_rest": [7, 6, 10, 7, 7],
+            "roof": ["outdoors", "dome", "closed", "outdoors", "open"],
+            "wind": [10, None, None, None, 50],
+        }
+    )
+    out = {r["game_id"]: r for r in context_columns(sched, ContextConfig()).iter_rows(named=True)}
+    assert out["b"]["h_rest"] == 7.0 and out["b"]["a_rest"] == -1.0  # 14 - 7, 6 - 7
+    assert out["c"]["h_rest"] == -3.0 and out["c"]["a_rest"] == 3.0
+    assert out["d"]["h_rest"] == 0.0 and out["d"]["rest_missing"] is True
+    assert out["b"]["indoor"] == 1.0 and out["c"]["indoor"] == 1.0
+    assert out["e"]["indoor"] == 0.0  # open retractable roof counts as outdoors
+    assert out["b"]["wind"] == 0.0 and out["b"]["wind_missing"] is False  # indoors
+    assert out["e"]["wind"] == 30.0  # capped
+    # 2020 outdoor game with no wind: 2019's outdoor average (10 mph), flagged.
+    assert out["d"]["wind"] == 10.0 and out["d"]["wind_missing"] is True
+    capped = context_columns(sched, ContextConfig(rest_cap_days=3.0))
+    assert capped.filter(pl.col("game_id") == "b")["h_rest"][0] == 3.0
+
+
+def test_context_features_enter_the_design_matrix() -> None:
+    games = pl.DataFrame({"h_rest": [3.0], "a_rest": [-2.0], "indoor": [1.0], "wind": [0.0]})
+    x_home, x_away = design_matrices(games, ["rest", "opp_rest", "indoor", "wind"])
+    assert x_home.tolist() == [[3.0, -2.0, 1.0, 0.0]]
+    assert x_away.tolist() == [[-2.0, 3.0, 1.0, 0.0]]

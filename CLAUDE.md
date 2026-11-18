@@ -55,15 +55,17 @@ Monte Carlo simulator for single NFL games. Given two teams and a week, it simul
 3. ✅ Injuries: weekly reports and practice participation, availability sampling, depth chart replacement
 4. ⛔ (stopped at the step 3 gate, no gain; `docs/phase4-plan.md`) Matchups: pass rush vs. pass block, WR/TE vs. CB/S, run game vs. run defense, QB vs. pressure/scheme
 5. Tendencies and game script: play-calling, pace, 4th down, red zone; engine moves from game-level to drive-level to play-level
-6. Context: home field, rest/travel, weather/dome, coaching, divisional familiarity
+6. ✅ Context (indoor + wind on by default; home-field options and rest opt-in, no gain; `docs/phase6-plan.md`): home field, rest/travel, weather/dome, coaching, divisional familiarity
 7. Scenarios and output: overrides ("QB out"), N-run summaries, per-player stat lines, CLI, optional Streamlit dashboard
 
 Mark phases done here as they merge.
 
 ## Current status
-Phases 0-3 done and merged to `main` (Phase 1 via PR #1, Phase 2 via PRs #4-#6, Phase 3 via PRs #7-#8), CI green on Python 3.11 and 3.12. Neither Phase 2 player features nor Phase 3 injury-aware features significantly beat the Phase 1 baseline, so both are opt-in and the baseline below is still the benchmark.
+Phases 0-3 and 6 done and merged to `main` (Phase 1 via PR #1, Phase 2 via PRs #4-#6, Phase 3 via PRs #7-#8, Phase 6 via PRs #15-#16); Phase 4 stopped at its gate (PRs #11-#14). Phase 5 (drive/play-level engine) is next on the roadmap. CI green on Python 3.11 and 3.12. Player (Phase 2) and injury (Phase 3) features are opt-in. Phase 6 added indoor and wind to the default features, which lowered total MAE only (not significant, but it met the pre-set rule).
 
-Phase 1 baseline (the benchmark; `nflsim backtest --seasons 2021-2024 --n 10000 --seed 42`, 1,139 games):
+**Current default model (the benchmark from Phase 6 on;** `nflsim backtest --seasons 2021-2024 --n 10000 --seed 42`, 1,139 games): margin MAE 10.17, total MAE 10.61, Brier 0.2254, log loss 0.6438. Compare later phases against this.
+
+Phase 1 baseline (the original benchmark, six team features only; `nflsim backtest --seasons 2021-2024 --n 10000 --seed 42`, 1,139 games):
 
 | Method | Margin MAE | Total MAE | Brier | Log loss |
 |---|---|---|---|---|
@@ -96,4 +98,5 @@ Data notes:
 - Pressure data (Phase 4 step 1, `nflsim.data.dropbacks`): the raw participation flag has no value on sacks before 2023 and is always set on them from 2023; scrambles are almost never flagged before 2023. `pressure` counts every sack as pressure; leave scrambles out of anything compared across seasons. Rates still differ by era (29% / 33-36% / 28-30%), so normalize within season. Participation pressures correlate 0.64-0.73 with PFR per team-game. Plan and gate for Phase 4: `docs/phase4-plan.md`.
 - Pass rush ratings (Phase 4 step 2, `nflsim.model.matchups`, config `[matchups]`): per team, offense and defense deviations from the same season's league average (pressure rate, EPA pressured, EPA clean), weeks before W only, shrunk toward carryover x last season. Skill tune 2018-2022 / holdout 2023-2025: offense pressure 0.086 / 0.044, defense pressure 0.013 / 0.030, EPA pressured about 0 (noise), EPA clean offense 0.029 / 0.041. Defensive pressure barely carries from week to week.
 - Phase 4 gate (step 3, 2026-11-17, `nflsim matchup-eval`, fit 2018-2022, scored 2023-2025, game bootstrap): **fail, Phase 4 stopped.** Pressure log loss: additive (log5, fitted weights) 0.60283, + matchup term 0.60283 (diff 0.00000, CI [-0.00003, +0.00004]); log5 with no fitting is as good. Team-game pass EPA MSE: additive EPA rating 0.09290; pressure mixture 0.09403-0.09422 (worse, +0.0011 to +0.0013). Same within one era (fit 2018-2020, test 2021-2022). No matchup feature was added to the game model; the Phase 1 baseline is still the benchmark.
+- Context (Phase 6, `[context]`, `nflsim.model.points.context_columns`): `rest`/`opp_rest` (days minus 7, capped +/-7), `indoor` (dome or closed roof; `open` counts as outdoors), `wind` (outdoor mph, capped at 30; 0 indoors; missing outdoor wind, 32% of 2022 and 14% of 2023, uses earlier seasons' outdoor mean and is flagged). Hypothetical `simulate` games take the roof from the home team's latest home game (flagged). Home field can leave out seasons or weight recent ones (`[model] home_exclude_seasons`, `home_half_life_seasons`); no gain. Home margin by season: +3.1 (2016), +0.1 (2019), +0.2 (2020), +1.8 to +3.0 after.
 - Take positions from `rosters_weekly` per week (`nflsim.data.roster_weeks`), not from `players`: about 370 players change position over time. Some non-QBs throw passes (trick plays), so rate by position, not by pbp role.

@@ -6,9 +6,10 @@ A Monte Carlo NFL game simulator. Given two teams and a week, it simulates the g
 times and reports win probability, score distributions, spread, total, and player stat
 lines, accounting for season stats, player matchups, and injuries on both rosters.
 
-> **Status:** Phases 0-3 done. The game simulator and backtest
-> harness work. Player and injury features are built but opt-in, because they have not
-> yet beaten the Phase 1 baseline. See the [roadmap](#roadmap).
+> **Status:** Phases 0-3 and 6 done; Phase 4 tested and stopped (no gain). The game
+> simulator and backtest harness work. Context (indoor, wind) is in the default model;
+> player, injury and matchup features are built but opt-in because they have not beaten
+> the baseline. See the [roadmap](#roadmap).
 
 NFL outcomes are high-variance. The goal is a **well-calibrated** model, not certainty:
 every phase is backtested against the Phase 1 baseline, and a phase that doesn't improve
@@ -86,8 +87,8 @@ Phase 1 baseline, the benchmark every later phase is compared to (`nflsim backte
 | Vegas close | 9.79 | 10.29 | 0.2112 | 0.6115 |
 | Home field only | 11.00 | 10.90 | 0.2474 | 0.6893 |
 
-Later changes on the same games (paired bootstrap; none significant, so the defaults
-stay at the baseline):
+Later changes on the same games (paired bootstrap). None is significant; only indoor +
+wind met the adoption rule (total MAE better in 3 of 4 seasons) and is now a default:
 
 | Change | Brier | Log loss | Margin MAE |
 |---|---|---|---|
@@ -95,6 +96,10 @@ stay at the baseline):
 | + player features (Phase 2) | 0.2255 | 0.6436 | 10.20 |
 | + injury-aware player features (Phase 3) | 0.2250 | 0.6428 | 10.18 |
 | ... with who plays drawn per run | 0.2250 | 0.6428 | 10.18 |
+| Pass-rush matchup (Phase 4) | not added: failed its play-level gate | | |
+| Home field without 2020 (Phase 6) | 0.2256 | 0.6440 | 10.18 |
+| + rest (Phase 6) | 0.2255 | 0.6439 | 10.18 |
+| **+ indoor, wind (Phase 6, default)** | 0.2254 | 0.6438 | 10.17 (total MAE 10.69 -> **10.61**) |
 
 ## Configuration
 
@@ -125,7 +130,7 @@ CI runs all four on Python 3.11 and 3.12 for every push and pull request. See
 | 3 | Injuries for both rosters, sampled per simulation | ✅ (opt-in; no significant backtest gain) |
 | 4 | Position-group and individual matchups | ⛔ stopped: pass-rush matchup tested, no gain ([plan and results](docs/phase4-plan.md)) |
 | 5 | Tendencies, game script, drive/play-level engine | |
-| 6 | Context: home field, rest, travel, weather, coaching | |
+| 6 | Context: home field, rest, travel, weather, coaching | ✅ indoor + wind by default; home field and rest no gain ([plan and results](docs/phase6-plan.md)) |
 | 7 | Scenarios ("QB1 out"), CLI output, optional dashboard | |
 
 ## License

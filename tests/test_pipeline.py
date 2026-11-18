@@ -101,3 +101,31 @@ def test_predict_matchup_samples_availability_from_lineups() -> None:
     assert a.sampled_availability and not flat.sampled_availability
     assert a.home_win_prob == b.home_win_prob
     assert a.margin_quantiles == b.margin_quantiles
+
+
+def test_home_roof_fills_hypothetical_games_from_latest_home_game() -> None:
+    from nflsim.pipeline import home_roof
+
+    schedules = pl.DataFrame(
+        {
+            "season": [2019, 2020, 2020],
+            "week": [1, 1, 2],
+            "home_team": ["OAK", "LV", "KC"],
+            "away_team": ["KC", "KC", "LV"],
+            "location": ["Home", "Home", "Home"],
+            "roof": ["outdoors", "dome", "outdoors"],
+        }
+    )
+    extra = pl.concat(
+        [
+            matchup_row(2021, 3, "LV", "KC", neutral=False),
+            matchup_row(2021, 3, "KC", "LV", neutral=True),
+        ]
+    ).with_columns(game_id=pl.Series(["SIM", "SIM2"]))
+    out = {r["game_id"]: r for r in home_roof(extra, schedules).iter_rows(named=True)}
+    assert out["SIM"]["roof"] == "dome"  # LV's latest home game (2020), not OAK's
+    assert out["SIM"]["roof_inferred"] is True
+    assert out["SIM2"]["roof"] is None  # neutral site: unknown
+    assert out["SIM2"]["roof_inferred"] is False
+    known = extra.with_columns(roof=pl.lit("closed"))
+    assert home_roof(known, schedules)["roof"].to_list() == ["closed", "closed"]
