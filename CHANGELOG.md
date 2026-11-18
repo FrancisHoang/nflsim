@@ -11,27 +11,46 @@ are reported whether or not they help.
 v0.1.0 and v0.2.0 were tagged after the fact, at the commits that finished those phases.
 The package version in `pyproject.toml` was 0.1.0 until 0.3.0.
 
-## [Unreleased]
+## [0.4.0] - 2026-11-17
 
-Phase 4 (matchups), stopped at its go/no-go test. See `docs/phase4-plan.md`.
+Phase 4 (matchups, stopped at its go/no-go test; `docs/phase4-plan.md`) and Phase 6
+(context; `docs/phase6-plan.md`).
 
-### Added
+### Changed
+- **Default features now include `indoor` and `wind`** (Phase 6): total MAE 10.69 ->
+  10.61 (95% CI [-0.20, +0.03]), better in 3 of 4 test seasons; win probability
+  unchanged (Brier 0.2254). Weak evidence, but it met the rule set before testing.
+
+### Added (Phase 6)
+- Context features from the schedule: `rest`, `opp_rest`, `indoor`, `wind` (config
+  `[context]`), with missing wind filled from earlier seasons and flagged.
+- Home-field options: leave seasons out (`home_exclude_seasons`) or weight recent ones
+  (`home_half_life_seasons`). No gain; off by default.
+- `simulate` takes a hypothetical game's roof from the home team's latest home game and
+  flags it, and flags unknown rest or wind.
+
+### Added (Phase 4)
 - Dropbacks joined with participation data: pressure, pass rushers, man/zone, coverage,
   box (`nflsim.data.dropbacks`), and PFR pressures per team-game as a cross-check.
 - Pass rush and pass protection ratings as of week W-1, as deviations from the same
   season's league average (`nflsim.model.matchups`; config `[matchups]`).
 - `nflsim matchup-eval`: data coverage, rating skill, and the step 3 gate.
 
-### Fixed (data)
+### Fixed (Phase 4 data)
 - The raw pressure flag changes in 2023 (sacks unflagged before, always flagged after);
   every sack now counts as pressure, and scrambles are left out of cross-season ratings.
 
-### Results
+### Results (Phase 4)
 - **The pass-rush matchup does not help.** Adding an offense x defense matchup term to
   pressure prediction changes 2023-2025 log loss by 0.00000 (95% CI [-0.00003,
   +0.00004]), and modeling pass EPA through pressure is worse than a plain EPA rating
   (+0.0011 MSE). Same result within a single season era. Per the plan's stopping rule,
   no matchup feature was added to the game model and the other matchups were not built.
+
+### Results (Phase 6)
+- Home field: leaving out 2020 or weighting recent seasons changes Brier by -0.0001 to
+  +0.0002 (all CIs include 0); not the cause of the under-confidence (slope stays 1.19).
+- Rest: no effect (Brier +0.0001). Travel and division games were not built.
 
 ## [0.3.0] - 2026-11-17
 
@@ -96,6 +115,7 @@ Phase 0 (scaffold) and Phase 1 (baseline game simulator).
 Tuned shrinkage and the direct margin fit did not significantly improve on these
 numbers, so the defaults stayed.
 
+[0.4.0]: https://github.com/FrancisHoang/nflsim/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/FrancisHoang/nflsim/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/FrancisHoang/nflsim/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/FrancisHoang/nflsim/releases/tag/v0.1.0
