@@ -6,7 +6,7 @@ import pytest
 
 from nflsim.config import ModelConfig, Settings
 from nflsim.data import DataCache
-from nflsim.pipeline import MATCHUP_ID, matchup_row, predict_matchup
+from nflsim.pipeline import MATCHUP_ID, matchup_row, predict_matchup, predict_week
 from tests.test_backtest import season_games
 
 SETTINGS = Settings(model=ModelConfig(features=("off_epa", "def_epa"), train_seasons=2))
@@ -152,3 +152,52 @@ def test_predict_matchup_flags_teams_without_closing_lines() -> None:
     assert any(f.startswith("BUF: no closing lines cached") for f in flags)
     plain = predict_matchup(games, SETTINGS, n=200, seed=1).flags
     assert not any("closing lines" in f for f in plain)
+
+
+def rated_games() -> pl.DataFrame:
+    """``season_games`` with the prior and games-played columns real game tables carry."""
+    return season_games(range(2019, 2022)).with_columns(
+        h_prior_source=pl.lit("prior_season"),
+        a_prior_source=pl.lit("prior_season"),
+        h_games_played=pl.lit(5),
+        a_games_played=pl.lit(5),
+    )
+
+
+def test_predict_week_matches_predict_matchup_game_by_game() -> None:
+    games = rated_games()
+    week = predict_week(games, SETTINGS, 2021, 3, n=300, seed=5)
+    ids = games.filter((pl.col("season") == 2021) & (pl.col("week") == 3))["game_id"]
+    assert [p.game_id for p in week] == sorted(ids.to_list())
+    first = week[0]
+    alone = predict_matchup(
+        games.with_columns(
+            pl.when(pl.col("game_id") == first.game_id)
+            .then(pl.lit(MATCHUP_ID))
+            .otherwise(pl.col("game_id"))
+            .alias("game_id")
+        ),
+        SETTINGS,
+        n=300,
+        seed=5,
+    )
+    assert first.result is not None
+    assert first.result.home_win_prob == alone.home_win_prob
+    np.testing.assert_array_equal(first.result.home_scores, alone.home_scores)
+
+
+def test_predict_week_reports_unratable_games_and_rejects_empty_weeks() -> None:
+    games = rated_games()
+    target = games.filter((pl.col("season") == 2021) & (pl.col("week") == 3))["game_id"][0]
+    broken = games.with_columns(
+        pl.when(pl.col("game_id") == target)
+        .then(None)
+        .otherwise(pl.col("h_off_epa"))
+        .alias("h_off_epa")
+    )
+    week = predict_week(broken, SETTINGS, 2021, 3, n=100, seed=0)
+    bad = next(p for p in week if p.game_id == target)
+    assert bad.result is None and bad.error is not None and "no ratings" in bad.error
+    assert all(p.result is not None for p in week if p.game_id != target)
+    with pytest.raises(ValueError, match="no games scheduled"):
+        predict_week(games, SETTINGS, 2021, 40, n=100, seed=0)
