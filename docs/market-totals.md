@@ -39,4 +39,33 @@ Also checked on 2017-2024.
 
 ## Results
 
-(filled in after the run)
+`nflsim backtest --n 10000 --seed 42`, paired game bootstrap (5,000 resamples), benchmark =
+current default.
+
+| Seasons | Metric | Default | + `mkt_tot`, `opp_mkt_tot` | Diff (95% CI) |
+|---|---|---|---|---|
+| 2021-2024 | Total MAE | 10.436 | 10.423 | -0.013 [-0.077, +0.049] |
+| | CRPS total | 7.422 | 7.421 | -0.001 [-0.040, +0.036] |
+| | Brier | 0.2195 | 0.2187 | -0.0007 [-0.0015, +0.0000] |
+| | Log loss | 0.6307 | 0.6287 | -0.0020 [-0.0037, -0.0003] |
+| | Margin MAE | 10.063 | 10.044 | -0.019 [-0.045, +0.006] |
+| 2017-2024 | Total MAE | 10.762 | 10.788 | +0.025 [-0.046, +0.102] |
+| | CRPS total | 7.683 | 7.716 | +0.033 [-0.014, +0.082] |
+| | Brier | 0.2171 | 0.2172 | +0.0002 [-0.0006, +0.0009] |
+
+Total MAE by season (2021-2024): -0.05, -0.07, +0.05, +0.02 (2 of 4 better).
+Vegas: total MAE 10.29, CRPS total 7.302.
+
+**Gate: fail** on conditions 1 and 2 (both CIs include 0; 2 of 4 seasons). The
+small log-loss gain on 2021-2024 is not what the feature was for and reverses on
+2017-2024, so it is not a reason to adopt it. The features stay opt-in
+(`--features ...,mkt_tot,opp_mkt_tot`); the default is unchanged.
+
+## Why it does not help
+
+The fitted coefficients are small (about +0.3 per point of tendency, own and opponent):
+the team ratings already explain most of what earlier totals say about a team. The gap to
+Vegas on totals is real (the Vegas-minus-model total correlates 0.19 with the model's
+error; gap SD 3.0 points), but it is in *this week's* line (weather at kickoff, injuries,
+the specific matchup), which earlier weeks' lines cannot carry. Using this week's line
+would be using Vegas as the prediction, not as an input.

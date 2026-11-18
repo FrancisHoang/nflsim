@@ -415,3 +415,7 @@ def test_build_games_adds_market_strength_from_earlier_weeks() -> None:
     assert out[1]["a_mkt"] < 0 < out[1]["h_mkt"]
     x_h, x_a = design_matrices(build_games(sched, games, RCFG), ["mkt", "opp_mkt"])
     assert x_h[1, 0] == x_a[1, 1]  # the home team's strength is the away side's opponent
+    x_h, x_a = design_matrices(build_games(sched, games, RCFG), ["mkt_tot", "opp_mkt_tot"])
+    assert x_h[0].tolist() == [0.0, 0.0]  # no totals before week 1
+    # Both teams played the same week-1 game, so their scoring tendencies are equal.
+    assert x_h[1, 0] == pytest.approx(x_h[1, 1]) and x_h[1, 0] == pytest.approx(x_a[1, 1])
