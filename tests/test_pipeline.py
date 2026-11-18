@@ -201,3 +201,18 @@ def test_predict_week_reports_unratable_games_and_rejects_empty_weeks() -> None:
     assert all(p.result is not None for p in week if p.game_id != target)
     with pytest.raises(ValueError, match="no games scheduled"):
         predict_week(games, SETTINGS, 2021, 40, n=100, seed=0)
+
+
+def test_predict_matchup_flags_teams_without_a_listed_starter() -> None:
+    qb = Settings(model=ModelConfig(features=("off_epa", "def_epa", "qb_change"), train_seasons=2))
+    games = rated_games().with_columns(
+        h_qb_change=pl.lit(0.0),
+        a_qb_change=pl.lit(0.0),
+        h_qb_starter_listed=pl.lit(True),
+        a_qb_starter_listed=pl.lit(True),
+    )
+    games = with_matchup(games, h_qb_starter_listed=True, a_qb_starter_listed=False)
+    flags = predict_matchup(games, qb, n=200, seed=1).flags
+    listed = [f for f in flags if "no starting QB listed" in f]
+    assert len(listed) == 1 and listed[0].startswith("BUF")
+    assert not any("starting QB" in f for f in predict_matchup(games, SETTINGS, 200, 1).flags)

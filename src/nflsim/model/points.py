@@ -130,7 +130,7 @@ def build_games(
     if player_features is not None:
         extra = [
             c
-            for c in ("injury_report", *QB_CHANGE_FEATURES, "qb_starter_listed")
+            for c in ("injury_report", *QB_CHANGE_FEATURES, "qb_starter_listed", "qb_starter_id")
             if c in player_features.columns
         ]
         ratings = ratings.join(

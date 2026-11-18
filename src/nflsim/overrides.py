@@ -130,6 +130,34 @@ def override_probability(kind: OverrideKind, config: InjuriesConfig) -> float:
     return float(config.play_probability_regular["doubtful"]["none"])
 
 
+def _qb_change_updates(
+    info: dict[str, object],
+    sides: dict[str, str],
+    resolved: list[ResolvedOverride],
+    updates: dict[str, float],
+) -> dict[str, float]:
+    """New ``qb_change``/``qb_change_proj`` values for the game row after overrides."""
+    out: dict[str, float] = {}
+    for team, side in sides.items():
+        proj, old_off, new_off = (
+            info.get(f"{side}qb_change_proj"),
+            info.get(f"{side}off_qb"),
+            updates.get(f"{side}off_qb"),
+        )
+        if not isinstance(proj, float) or not isinstance(old_off, float) or new_off is None:
+            continue
+        new_proj = proj + new_off - old_off
+        out[f"{side}qb_change_proj"] = new_proj
+        starter = info.get(f"{side}qb_starter_id")
+        starter_out = any(
+            r.team == team and r.kind in ("out", "doubtful") and r.gsis_id == starter
+            for r in resolved
+        )
+        if starter_out or not info.get(f"{side}qb_starter_listed"):
+            out[f"{side}qb_change"] = new_proj
+    return out
+
+
 def apply_overrides(
     games: pl.DataFrame,
     game_id: str,
@@ -143,6 +171,10 @@ def apply_overrides(
     recomputed as expected values of the changed lineup, the changed lineup, and one row
     per override with ``before``/``after`` chance to play (null when the player has no
     projected role, i.e. the override cannot change the prediction).
+
+    Quarterback change (``qb_change_proj``) moves with the projected QB value. ``qb_change``
+    keeps the listed starter, unless he is overridden out or doubtful (or no starter is
+    listed); then it is the override-adjusted projection, i.e. his backup.
     """
     row = games.filter(pl.col("game_id") == game_id)
     if row.height != 1:
@@ -182,6 +214,7 @@ def apply_overrides(
     if not game_lineup.is_empty():
         for v in expected_role_values(game_lineup).iter_rows(named=True):
             updates[f"{sides[v['team']]}{ROLE_FEATURES[v['role']]}"] = float(v["value"])
+    updates |= _qb_change_updates(info, sides, resolved, updates)
     is_game = pl.col("game_id") == game_id
     new_games = games.with_columns(
         pl.when(is_game).then(pl.lit(value)).otherwise(pl.col(col)).alias(col)

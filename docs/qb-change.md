@@ -53,6 +53,13 @@ backtest is an upper bound. For upcoming games nflverse lists an expected starte
 real-time gain is somewhere between the injury-aware projection (-0.0013) and the listed
 starter (-0.0029); nflverse's historical pre-game listings are not available to measure it.
 
-Not handled yet: `simulate --out/--plays` change the projected lineup, not the listed
-starter, so a QB override would not move `qb_change`; per-run availability sampling does
-not resample `qb_change_proj`.
+**Decision (2026-11-18):** `qb_change` with the listed starter is on by default.
+Starters are usually known before kickoff, and the closing line uses the same information.
+`simulate` prints each team's listed starter in "What I used", and flags teams with none
+listed (then the projection is used). Ruling out the listed starter with `--out` or
+`--doubtful` switches that team to the override-adjusted projection, i.e. his backup
+(BUF 2026 week 11, Josh Allen out: -7.3 points, against -4.4 from `off_qb` alone before).
+Other QB overrides leave the listed starter in place. New benchmark: Brier 0.2195, log
+loss 0.6307, margin MAE 10.06, total MAE 10.44 (`pbp_only` 0.2229).
+
+Still not handled: per-run availability sampling does not resample `qb_change_proj`.

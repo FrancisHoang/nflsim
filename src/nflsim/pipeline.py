@@ -374,6 +374,13 @@ def predict_matchup(
             )
 
     used = set(settings.model.features)
+    if "qb_change" in used:
+        for prefix, name in (("h_", info["home_team"]), ("a_", info["away_team"])):
+            if info.get(f"{prefix}qb_starter_listed") is False:
+                flags.append(
+                    f"{name}: no starting QB listed yet; quarterback change uses the "
+                    "projected QB (from the injury report with --injuries)"
+                )
     if used & set(MARKET_FEATURES):
         for prefix, name in (("h_", info["home_team"]), ("a_", info["away_team"])):
             if info.get(f"{prefix}mkt_games"):
