@@ -1,6 +1,6 @@
 # Phase 5 plan: drive-level engine
 
-Status: **proposed** (2026-11-17).
+Status: **in progress** (2026-11-17). Step 0 is done (benchmark below).
 
 ## Goal
 
@@ -47,6 +47,18 @@ Add to the backtest harness, for every engine:
 - **Key numbers:** simulated vs. actual share of margins of 3, 7, 6, 10, 14.
 
 Report the current default on these first; it is the benchmark for this phase.
+
+**Result (done):** current default engine, 2021-2024, n 10000, seed 42, 1,139 games.
+
+| | CRPS margin | CRPS total |
+|---|---|---|
+| Model | 7.404 | 7.517 |
+| Vegas (normal around the closing line) | 7.126 | 7.302 |
+
+- Key numbers (actual vs. model): margin 3: 15.2% vs. 9.0%; 7: 7.5% vs. 5.2%; 6: 7.5% vs.
+  5.4%; 1: 4.7% vs. 6.1%.
+- Against the closing lines the model has no edge: whatever its chance of a home cover or
+  an over (0.25-0.75), the actual rate stays at 46-51%. Expected for efficient lines.
 
 ### Step 1: drive data
 

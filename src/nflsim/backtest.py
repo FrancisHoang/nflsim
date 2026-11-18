@@ -22,6 +22,7 @@ import numpy as np
 import polars as pl
 
 from nflsim.config import Settings
+from nflsim.distribution import beat_line_probability, crps_normal, crps_samples, margin_shares
 from nflsim.model import PointsModel, fit_points_model, simulate_scores
 from nflsim.pipeline import availability_runs
 
@@ -85,13 +86,24 @@ def walk_forward(
         # A share of n runs can be exactly 0 or 1; keep it within half a run of the edges.
         p_model = np.clip(sim.home_win_prob(), 0.5 / n, 1 - 0.5 / n)
 
+        base = _baselines(test, train)
+        actual_margin = base["actual_margin"].to_numpy()
+        actual_total = base["actual_total"].to_numpy()
+        spread = base["vegas_margin"].cast(pl.Float64).fill_null(np.nan).to_numpy()
+        total_line = base["vegas_total"].cast(pl.Float64).fill_null(np.nan).to_numpy()
+        keys = margin_shares(sim.margin, settings.backtest.key_margins)
         frames.append(
-            _baselines(test, train).with_columns(
+            base.with_columns(
                 model_margin=pl.Series(sim.mean_margin()),
                 model_total=pl.Series(sim.mean_total()),
                 model_p=pl.Series(p_model),
                 model_mu_home=pl.Series(_run_mean(mu_home)),
                 model_mu_away=pl.Series(_run_mean(mu_away)),
+                model_crps_margin=pl.Series(crps_samples(sim.margin, actual_margin)),
+                model_crps_total=pl.Series(crps_samples(sim.total, actual_total)),
+                model_p_cover=pl.Series(beat_line_probability(sim.margin, spread)),
+                model_p_over=pl.Series(beat_line_probability(sim.total, total_line)),
+                **{f"model_key_{k}": pl.Series(v) for k, v in keys.items()},
             )
         )
         fits.append(
@@ -121,6 +133,8 @@ def _baselines(test: pl.DataFrame, train: pl.DataFrame) -> pl.DataFrame:
     home_p = float(at_home.select(outcome.mean()).item())
     mean_total = float(train.select((pl.col("home_score") + pl.col("away_score")).mean()).item())
     spread_sd = float(train.select((margin - pl.col("spread_line")).std()).item())
+    total = pl.col("home_score") + pl.col("away_score")
+    total_sd = float(train.select((total - pl.col("total_line")).std()).item())
 
     p_home_ml = american_to_prob(pl.col("home_moneyline"))
     p_away_ml = american_to_prob(pl.col("away_moneyline"))
@@ -150,6 +164,25 @@ def _baselines(test: pl.DataFrame, train: pl.DataFrame) -> pl.DataFrame:
         (pl.col("home_sign") * home_margin).alias("home_margin"),
         pl.lit(mean_total).alias("home_total"),
         pl.when(pl.col("home_sign") == 1.0).then(home_p).otherwise(0.5).alias("home_p"),
+    ).with_columns(
+        # Vegas as a distribution, for CRPS: normal around the line, with the spread of
+        # results around the line in the training seasons.
+        pl.Series(
+            "vegas_crps_margin",
+            crps_normal(
+                test["spread_line"].cast(pl.Float64).fill_null(np.nan).to_numpy(),
+                spread_sd,
+                test.select(margin).to_series().to_numpy(),
+            ),
+        ).fill_nan(None),
+        pl.Series(
+            "vegas_crps_total",
+            crps_normal(
+                test["total_line"].cast(pl.Float64).fill_null(np.nan).to_numpy(),
+                total_sd,
+                test.select(total).to_series().to_numpy(),
+            ),
+        ).fill_nan(None),
     )
 
 
