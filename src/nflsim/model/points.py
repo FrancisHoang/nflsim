@@ -26,10 +26,12 @@ import polars as pl
 from nflsim.config import (
     PLAYER_FEATURES,
     ContextConfig,
+    MarketConfig,
     ModelConfig,
     RatingsConfig,
 )
 from nflsim.data.teams import normalize_teams
+from nflsim.model.market import market_ratings
 from nflsim.model.ratings import RATING_COLUMNS, ratings_as_of
 
 FloatArray = npt.NDArray[np.float64]
@@ -93,6 +95,7 @@ def build_games(
     ratings_config: RatingsConfig,
     player_features: pl.DataFrame | None = None,
     context: ContextConfig | None = None,
+    market: MarketConfig | None = None,
 ) -> pl.DataFrame:
     """One row per scheduled game with both teams' pre-game ratings attached.
 
@@ -107,6 +110,8 @@ def build_games(
 
     Context columns (``context_columns``): ``h_rest``/``a_rest``, ``indoor``, ``wind``,
     ``rest_missing``, ``wind_missing``, ``roof`` and ``roof_inferred``.
+
+    Market strength (``market_ratings``, earlier weeks' closing spreads): ``h_mkt``/``a_mkt``.
     """
     sched = normalize_teams(schedules, ["home_team", "away_team"]).cast(
         {"season": pl.Int32, "week": pl.Int32}
@@ -169,6 +174,13 @@ def build_games(
         .join(league_points_as_of(sched), on=["season", "week"], how="left")
         .join(context_columns(sched, context or ContextConfig()), on="game_id", how="left")
     )
+    mkt = market_ratings(sched, market or MarketConfig()).select("season", "week", "team", "mkt")
+    for prefix, team in (("h_", "home_team"), ("a_", "away_team")):
+        games = games.join(
+            mkt.rename({"team": team, "mkt": f"{prefix}mkt"}),
+            on=["season", "week", team],
+            how="left",
+        )
     needed = [f"{p}{c}" for p in ("h_", "a_") for c in _RATING_FIELDS] + ["league_ppg"]
     return games.with_columns(
         pl.all_horizontal(pl.col(needed).is_not_null()).alias("has_ratings")
@@ -265,6 +277,9 @@ def _features(offense: str, defense: str) -> dict[str, pl.Expr]:
         "opp_rest": pl.col(f"{defense}rest"),
         "indoor": pl.col("indoor"),
         "wind": pl.col("wind"),
+        # Market strength (opt-in): the scoring team's and the opponent's.
+        "mkt": pl.col(f"{offense}mkt"),
+        "opp_mkt": pl.col(f"{defense}mkt"),
     }
 
 
@@ -411,7 +426,7 @@ def fit_points_model(games: pl.DataFrame, config: ModelConfig) -> PointsModel:
         [train["home_score"].to_numpy(), train["away_score"].to_numpy()]
     ).astype(np.float64)
     offset = np.concatenate([league, league])
-    beta, *_ = np.linalg.lstsq(x, points - offset, rcond=None)
+    beta = _least_squares(x, points - offset, range(1, 1 + n_feat), config.ridge)
 
     model = PointsModel(
         features=features,
@@ -426,7 +441,7 @@ def fit_points_model(games: pl.DataFrame, config: ModelConfig) -> PointsModel:
         # No intercept: swapping home and away must flip the sign of the margin.
         xm = np.column_stack([x_home - x_away, home_cols])
         margin = (train["home_score"] - train["away_score"]).to_numpy().astype(np.float64)
-        gamma, *_ = np.linalg.lstsq(xm, margin, rcond=None)
+        gamma = _least_squares(xm, margin, range(n_feat), config.ridge)
         model = replace(
             model,
             margin_coefs=tuple(float(g) for g in gamma[:n_feat]),
@@ -440,3 +455,19 @@ def fit_points_model(games: pl.DataFrame, config: ModelConfig) -> PointsModel:
     if excess <= 0:
         raise ValueError("points are not overdispersed; a negative binomial does not apply")
     return replace(model, dispersion=float(np.mean(mu**2) / excess))
+
+
+def _least_squares(x: FloatArray, y: FloatArray, penalized: range, ridge: float) -> FloatArray:
+    """Least squares of ``y`` on ``x``; with ``ridge`` > 0 the ``penalized`` columns get a
+    ridge penalty ``ridge * rows * sd_j^2 * b_j^2`` (i.e. on standardized features)."""
+    if ridge <= 0 or len(penalized) == 0:
+        beta, *_ = np.linalg.lstsq(x, y, rcond=None)
+        return np.asarray(beta, dtype=np.float64)
+    cols = list(penalized)
+    sd = x[:, cols].std(axis=0)
+    extra = np.zeros((len(cols), x.shape[1]))
+    extra[np.arange(len(cols)), cols] = np.sqrt(ridge * x.shape[0]) * sd
+    beta, *_ = np.linalg.lstsq(
+        np.vstack([x, extra]), np.concatenate([y, np.zeros(len(cols))]), rcond=None
+    )
+    return np.asarray(beta, dtype=np.float64)

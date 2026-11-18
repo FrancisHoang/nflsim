@@ -101,7 +101,9 @@ def load_games_with_lineups(
     players = lineup = None
     if any(f in PLAYER_FEATURES for f in settings.model.features):
         players, lineup = load_player_features(cache, settings, seasons, schedules)
-    games = build_games(schedules, team_games, settings.ratings, players, settings.context)
+    games = build_games(
+        schedules, team_games, settings.ratings, players, settings.context, settings.market
+    )
     return games, lineup
 
 

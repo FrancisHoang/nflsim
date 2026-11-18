@@ -7,7 +7,7 @@ import numpy as np
 import polars as pl
 import pytest
 
-from nflsim.config import ModelConfig, RatingsConfig
+from nflsim.config import ModelConfig, PointsFeature, RatingsConfig
 from nflsim.data import normalize_teams
 from nflsim.model import build_games, fit_points_model, league_points_as_of, team_game_stats
 from nflsim.model.points import PointsModel, design_matrices
@@ -381,3 +381,37 @@ def test_context_features_enter_the_design_matrix() -> None:
     x_home, x_away = design_matrices(games, ["rest", "opp_rest", "indoor", "wind"])
     assert x_home.tolist() == [[3.0, -2.0, 1.0, 0.0]]
     assert x_away.tolist() == [[-2.0, 3.0, 1.0, 0.0]]
+
+
+def test_ridge_shrinks_coefficients_but_not_home_field() -> None:
+    truth = {"intercept": 0.5, "home": 1.0, "off_epa": 30.0, "def_epa": 25.0}
+    games = synthetic_games(20_000, truth, seed=4)
+    feats: tuple[PointsFeature, ...] = ("off_epa", "def_epa")
+    plain = fit_points_model(games, ModelConfig(features=feats))
+    zero = fit_points_model(games, ModelConfig(features=feats, ridge=0.0))
+    shrunk = fit_points_model(games, ModelConfig(features=feats, ridge=1.0))
+    assert zero.coefs == plain.coefs
+    assert all(abs(s) < abs(p) for s, p in zip(shrunk.coefs, plain.coefs, strict=True))
+    assert shrunk.home == pytest.approx(plain.home, abs=0.1)
+    direct = fit_points_model(games, ModelConfig(features=feats, margin_fit="direct", ridge=1.0))
+    plain_direct = fit_points_model(games, ModelConfig(features=feats, margin_fit="direct"))
+    assert direct.margin_coefs is not None and plain_direct.margin_coefs is not None
+    assert abs(direct.margin_coefs[0]) < abs(plain_direct.margin_coefs[0])
+
+
+def test_build_games_adds_market_strength_from_earlier_weeks() -> None:
+    kinds = ["pass", "run"] * 5
+    rows = [
+        play(2019, w, o, d, 0.1, play_type=k)
+        for w in (1, 2)
+        for o, d in (("KC", "LV"), ("LV", "KC"))
+        for k in kinds
+    ]
+    games = team_game_stats(pbp(rows), RCFG)
+    sched = schedule([(2019, 1, "OAK", "KC", 17, 24), (2019, 2, "KC", "OAK", 28, 10)])
+    out = build_games(sched, games, RCFG).sort("week").to_dicts()
+    assert out[0]["h_mkt"] == 0.0 and out[0]["a_mkt"] == 0.0  # no lines before week 1
+    # Week 1 line: LV favored by -3 at home (nflverse sign), so LV < KC by week 2.
+    assert out[1]["a_mkt"] < 0 < out[1]["h_mkt"]
+    x_h, x_a = design_matrices(build_games(sched, games, RCFG), ["mkt", "opp_mkt"])
+    assert x_h[1, 0] == x_a[1, 1]  # the home team's strength is the away side's opponent
