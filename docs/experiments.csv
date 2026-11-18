@@ -1,0 +1,18 @@
+date,experiment,phase,brier_diff,ci_low,ci_high,benchmark,adopted,doc
+2026-11-16,Shrinkage tuning (2024 holdout),1,0.0006,-0.0035,0.0048,Phase 1 baseline,no,
+2026-11-17,Direct margin fit,1,-0.0006,-0.0029,0.0017,Phase 1 baseline,no,docs/underconfidence.md
+2026-11-17,Player ratings added,2,0.0001,-0.0018,0.0020,Phase 1 baseline,no,
+2026-11-17,Player ratings replacing team EPA,2,0.0022,-0.0006,0.0050,Phase 1 baseline,no,
+2026-11-17,Injury-aware player features,3,-0.0004,-0.0024,0.0017,Phase 1 baseline,no,
+2026-11-17,Drive-by-drive engine,5,-0.0003,-0.0012,0.0007,Phase 1 baseline,no,docs/phase5-plan.md
+2026-11-17,Home field without 2020,6,0.0002,-0.0004,0.0008,Phase 1 baseline,no,docs/phase6-plan.md
+2026-11-17,Rest days,6,0.0001,-0.0002,0.0004,Phase 1 baseline,no,docs/phase6-plan.md
+2026-11-17,Indoor and wind (total MAE -0.09),6,0.0000,-0.0004,0.0005,Phase 1 baseline,yes,docs/phase6-plan.md
+2026-11-18,Opponent-adjusted ratings,1,-0.0001,-0.0012,0.0011,Phase 1 baseline,no,docs/underconfidence.md
+2026-11-18,EPA-only features,1,0.0008,-0.0005,0.0022,Phase 1 baseline,no,docs/underconfidence.md
+2026-11-18,Walk-forward recalibration,1,-0.0005,-0.0010,0.0001,Phase 1 baseline,no,docs/underconfidence.md
+2026-11-18,Market strength,7,-0.0030,-0.0062,0.0002,Phase 1 baseline,yes,docs/underconfidence.md
+2026-11-18,Quarterback change,7,-0.0029,-0.0052,-0.0004,+ market strength,yes,docs/qb-change.md
+2026-11-18,Market totals (total MAE -0.01),7,-0.0007,-0.0015,0.0000,+ quarterback change,no,docs/market-totals.md
+2026-11-18,Recency weighting (8 weeks),7,0.0001,-0.0007,0.0008,+ quarterback change,no,docs/recency.md
+2026-11-18,Recency weighting (4 weeks),7,0.0007,-0.0006,0.0019,+ quarterback change,no,docs/recency.md
