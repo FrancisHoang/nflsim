@@ -52,3 +52,28 @@ def test_score_variance_matches_negative_binomial() -> None:
 def test_invalid_inputs(mu_h: list[float], mu_a: list[float], r: float, n: int) -> None:
     with pytest.raises(ValueError):
         simulate_scores(np.array(mu_h), np.array(mu_a), r, n, seed=0, overtime_points=3)
+
+
+def test_per_run_means_match_single_means_when_constant() -> None:
+    n = 300
+    flat = simulate_scores(MU_H, MU_A, 6.0, n, seed=5, overtime_points=3)
+    per_run = simulate_scores(
+        np.repeat(MU_H[:, None], n, axis=1),
+        np.repeat(MU_A[:, None], n, axis=1),
+        6.0,
+        n,
+        seed=5,
+        overtime_points=3,
+    )
+    assert np.array_equal(flat.home, per_run.home)
+    assert np.array_equal(flat.away, per_run.away)
+
+
+def test_per_run_means_vary_per_run_and_check_shape() -> None:
+    n = 20_000
+    mu_h = np.where(np.arange(n) % 2 == 0, 10.0, 30.0)[None, :]
+    sim = simulate_scores(mu_h, np.array([20.0]), 6.0, n, seed=3, overtime_points=3)
+    assert sim.home[0, ::2].mean() == pytest.approx(10.0, abs=0.6)
+    assert sim.home[0, 1::2].mean() == pytest.approx(30.0, abs=0.8)
+    with pytest.raises(ValueError, match="columns"):
+        simulate_scores(np.ones((1, 5)) * 20, np.array([20.0]), 6.0, 4, seed=0, overtime_points=3)

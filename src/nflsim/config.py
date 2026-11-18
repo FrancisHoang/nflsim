@@ -222,6 +222,11 @@ class SimConfig(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     overtime_points: int = Field(default=3, ge=1)
+    # With injury-aware player features: draw who plays in each run (True), or use the
+    # expected features in every run (False).
+    sample_availability: bool = True
+    # simulate lists players who may not play when their healthy role share is at least this.
+    report_min_share: float = Field(default=0.05, ge=0, le=1)
 
 
 class BacktestConfig(BaseModel):

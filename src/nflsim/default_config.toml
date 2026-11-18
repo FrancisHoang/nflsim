@@ -118,6 +118,14 @@ questionable_position_adjustment = { QB = -0.15 }
 # Points added to the winner when a simulated game ends tied (overtime, usually a field goal).
 # The overtime winner is drawn with probability proportional to each team's expected points.
 overtime_points = 3
+# With injury-aware player features ([model] injury_aware): draw who plays separately in
+# each run (true), or give every run the expected features (false). Sampling widens the
+# score distribution when key players are uncertain. Backtest 2021-2024 (2026-11-17):
+# same accuracy as expected features (Brier diff -0.00003, CI [-0.0003, +0.0002]).
+sample_availability = true
+# `nflsim simulate` lists players who may not play when they hold at least this share of
+# their role (dropbacks, carries or targets) when healthy.
+report_min_share = 0.05
 
 [backtest]
 # Equal-width bins of predicted home win probability in the calibration table.

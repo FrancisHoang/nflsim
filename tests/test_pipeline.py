@@ -75,3 +75,29 @@ def test_predict_matchup_flags_missing_injury_report() -> None:
     report_flags = [f for f in result.flags if "no injury report" in f]
     assert len(report_flags) == 1
     assert report_flags[0].startswith(result.away)
+
+
+def test_predict_matchup_samples_availability_from_lineups() -> None:
+    from tests.test_availability import LINEUP
+
+    games = with_matchup(
+        season_games(range(2019, 2022)), h_off_qb=0.0, a_off_qb=0.0, season=2024, week=5
+    ).with_columns(
+        pl.col("h_off_qb", "a_off_qb").fill_null(0.0),
+    )
+    games = games.with_columns(
+        pl.when(pl.col("game_id") == MATCHUP_ID)
+        .then(pl.lit(2024))
+        .otherwise(pl.col("season"))
+        .cast(pl.Int32)
+        .alias("season")
+    )
+    settings = Settings(
+        model=ModelConfig(features=("off_epa", "off_qb"), train_seasons=5, injury_aware=True)
+    )
+    a = predict_matchup(games, settings, n=4000, seed=2, lineup=LINEUP)
+    b = predict_matchup(games, settings, n=4000, seed=2, lineup=LINEUP)
+    flat = predict_matchup(games, settings, n=4000, seed=2)
+    assert a.sampled_availability and not flat.sampled_availability
+    assert a.home_win_prob == b.home_win_prob
+    assert a.margin_quantiles == b.margin_quantiles

@@ -31,7 +31,13 @@ from nflsim.injury_eval import (
     report_outcomes,
 )
 from nflsim.model.players import player_game_stats, usage_history
-from nflsim.pipeline import load_games, load_lineups, matchup_row, predict_matchup
+from nflsim.pipeline import (
+    availability_report,
+    load_games_with_lineups,
+    load_lineups,
+    matchup_row,
+    predict_matchup,
+)
 from nflsim.player_eval import evaluate_injury_usage, evaluate_ratings, evaluate_usage
 from nflsim.tuning import current_params, evaluate, evaluate_holdout, grid
 
@@ -110,6 +116,14 @@ def backtest(
             help="Injury-aware player features (default: config model.injury_aware).",
         ),
     ] = None,
+    sample_availability: Annotated[
+        bool | None,
+        typer.Option(
+            "--sample-availability/--expected-availability",
+            help="With --injuries: draw who plays in each run, or use expected features "
+            "(default: config sim.sample_availability).",
+        ),
+    ] = None,
     output: Annotated[
         Path | None, typer.Option(help="Write per-game predictions to this parquet file.")
     ] = None,
@@ -127,14 +141,19 @@ def backtest(
     if overrides:
         model_cfg = settings.model.model_validate({**settings.model.model_dump(), **overrides})
         settings = settings.model_copy(update={"model": model_cfg})
+    if sample_availability is not None:
+        sim_cfg = settings.sim.model_copy(update={"sample_availability": sample_availability})
+        settings = settings.model_copy(update={"sim": sim_cfg})
     test_seasons = parse_seasons(seasons)
-    games = load_games(DataCache(settings.data), settings, max(test_seasons))
-    predictions, fits = walk_forward(games, settings, test_seasons, n, seed)
+    games, lineup = load_games_with_lineups(DataCache(settings.data), settings, max(test_seasons))
+    predictions, fits = walk_forward(games, settings, test_seasons, n, seed, lineup)
 
     typer.echo(f"features: {', '.join(settings.model.features) or '(none)'}")
     typer.echo(f"margin fit: {settings.model.margin_fit}")
     if set(settings.model.features) & set(PLAYER_FEATURES):
         typer.echo(f"injury-aware player features: {settings.model.injury_aware}")
+        if settings.model.injury_aware:
+            typer.echo(f"availability sampled per run: {settings.sim.sample_availability}")
     typer.echo(f"simulations per game: {n:,}, seed: {seed}\n")
     for fit in fits:
         m = fit.model
@@ -180,9 +199,10 @@ def simulate(
     """Simulate one game from ratings as of the given week."""
     settings = load_settings(config)
     extra = matchup_row(season, week, home, away, neutral)
-    games = load_games(DataCache(settings.data), settings, season, extra=extra)
+    cache = DataCache(settings.data)
+    games, lineup = load_games_with_lineups(cache, settings, season, extra=extra)
     try:
-        r = predict_matchup(games, settings, n, seed)
+        r = predict_matchup(games, settings, n, seed, lineup)
     except ValueError as err:
         raise typer.BadParameter(str(err)) from err
 
@@ -201,6 +221,18 @@ def simulate(
         ("margin", r.margin_quantiles),
     ):
         typer.echo(f"  {label:<11}" + "  ".join(f"{values[q]:>5.0f}" for q in qs))
+    if lineup is not None:
+        min_share = settings.sim.report_min_share
+        report = availability_report(cache, lineup, r, min_share)
+        how = "drawn per run" if r.sampled_availability else "expected value in every run"
+        typer.echo(f"\n  May not play (healthy share >= {min_share:.0%}; availability {how}):")
+        if report.is_empty():
+            typer.echo("  (none)")
+        else:
+            typer.echo(
+                "  "
+                + format_table(report, [("slot_share", 2), ("play_prob", 2)]).replace("\n", "\n  ")
+            )
     for flag in r.flags:
         typer.echo(f"  flag: {flag}")
 

@@ -23,6 +23,7 @@ import polars as pl
 
 from nflsim.config import Settings
 from nflsim.model import PointsModel, fit_points_model, simulate_scores
+from nflsim.pipeline import availability_runs
 
 METHODS = ("model", "vegas", "home")
 
@@ -46,14 +47,22 @@ class SeasonFit:
 
 
 def walk_forward(
-    games: pl.DataFrame, settings: Settings, test_seasons: Iterable[int], n: int, seed: int
+    games: pl.DataFrame,
+    settings: Settings,
+    test_seasons: Iterable[int],
+    n: int,
+    seed: int,
+    lineup: pl.DataFrame | None = None,
 ) -> tuple[pl.DataFrame, list[SeasonFit]]:
     """Predict each test season from a model fit on earlier seasons only.
 
     Returns one row per predicted game (actuals plus each method's margin, total and home
     win probability) and the fitted model for each season. Each season's simulation uses
-    seed ``seed + season`` so seasons are reproducible independently.
+    seed ``seed + season`` so seasons are reproducible independently. With ``lineup``
+    (injury-aware lineups) and ``sim.sample_availability``, who plays is drawn per run
+    (``nflsim.pipeline.availability_runs``).
     """
+
     k = settings.model.train_seasons
     completed = pl.col("home_score").is_not_null() & pl.col("away_score").is_not_null()
     frames: list[pl.DataFrame] = []
@@ -68,7 +77,8 @@ def walk_forward(
             raise ValueError(f"no training seasons before {season}")
 
         model = fit_points_model(train, settings.model)
-        mu_home, mu_away = model.expected_points(test)
+        runs = availability_runs(test, model, lineup, settings, n, seed + season)
+        mu_home, mu_away = model.expected_points(test, runs)
         sim = simulate_scores(
             mu_home, mu_away, model.dispersion, n, seed + season, settings.sim.overtime_points
         )
@@ -80,8 +90,8 @@ def walk_forward(
                 model_margin=pl.Series(sim.mean_margin()),
                 model_total=pl.Series(sim.mean_total()),
                 model_p=pl.Series(p_model),
-                model_mu_home=pl.Series(mu_home),
-                model_mu_away=pl.Series(mu_away),
+                model_mu_home=pl.Series(_run_mean(mu_home)),
+                model_mu_away=pl.Series(_run_mean(mu_away)),
             )
         )
         fits.append(
@@ -94,6 +104,11 @@ def walk_forward(
             )
         )
     return pl.concat(frames, how="vertical"), fits
+
+
+def _run_mean(mu: np.ndarray) -> np.ndarray:
+    """Expected points per game, averaged over runs when they vary per run."""
+    return np.asarray(mu.mean(axis=1) if mu.ndim == 2 else mu, dtype=np.float64)
 
 
 def _baselines(test: pl.DataFrame, train: pl.DataFrame) -> pl.DataFrame:
