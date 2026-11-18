@@ -200,3 +200,36 @@ def test_bye_week_uses_latest_earlier_game() -> None:
 def test_invalid_wp_window_rejected() -> None:
     with pytest.raises(ValueError, match="min_wp"):
         RatingsConfig(min_wp=0.9, max_wp=0.1)
+
+
+def test_half_life_weights_recent_games_more() -> None:
+    # KC: +0.4 per play in week 1, -0.4 in week 2 (10 plays each); target week 3.
+    rows = [play(2021, 1, "KC", "BUF", 0.4) for _ in range(10)]
+    rows += [play(2021, 2, "KC", "BUF", -0.4) for _ in range(10)]
+    games = team_game_stats(pbp(rows), CFG)
+    cfg = CFG.model_copy(update={"half_life_weeks": 1.0})
+    kc = one(ratings_as_of(games, targets((2021, 3, "KC")), cfg), 2021, 3, "KC")
+    # Weights: week 1 = 0.25, week 2 = 0.5. League average 0, no previous season.
+    k = CFG.prior_plays_epa
+    total, count = 10 * 0.25 * 0.4 + 10 * 0.5 * -0.4, 10 * 0.25 + 10 * 0.5
+    assert kc["off_epa"] == pytest.approx(total / (count + k))
+    assert kc["games_played"] == 2  # a count of games, not a weight
+    plain = one(ratings_as_of(games, targets((2021, 3, "KC")), CFG), 2021, 3, "KC")
+    assert kc["off_epa"] < plain["off_epa"]
+
+
+def test_half_life_keeps_week_ratings_free_of_later_games() -> None:
+    base = season_rows(2021, 0.2, -0.2, weeks=3)
+    cfg = CFG.model_copy(update={"half_life_weeks": 2.0})
+    before = ratings_as_of(team_game_stats(pbp(base), CFG), targets((2021, 3, "KC")), cfg)
+    future = [play(2021, w, "KC", "BUF", 9.0) for w in (3, 4) for _ in range(50)]
+    after = ratings_as_of(team_game_stats(pbp(base + future), CFG), targets((2021, 3, "KC")), cfg)
+    for column in RATING_COLUMNS:
+        assert one(after, 2021, 3, "KC")[column] == pytest.approx(
+            one(before, 2021, 3, "KC")[column], abs=1e-12
+        )
+
+
+def test_half_life_with_opponent_adjust_rejected() -> None:
+    with pytest.raises(ValueError, match="half_life_weeks"):
+        RatingsConfig(opponent_adjust=True, half_life_weeks=4.0)

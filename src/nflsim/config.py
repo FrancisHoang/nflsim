@@ -42,11 +42,16 @@ class RatingsConfig(BaseModel):
     opponent_adjust: bool = False
     # Ridge strength, in plays, for the previous season's adjusted deviations (the prior).
     opponent_prior_ridge: float = Field(default=1.0, gt=0)
+    # Recency weighting: a game in week w counts 0.5 ** ((W - w) / half_life_weeks) when
+    # rating week W (totals and play counts). None = all of this season's games equally.
+    half_life_weeks: float | None = Field(default=None, gt=0)
 
     @model_validator(mode="after")
     def _wp_window(self) -> Self:
         if self.min_wp >= self.max_wp:
             raise ValueError("min_wp must be below max_wp")
+        if self.opponent_adjust and self.half_life_weeks is not None:
+            raise ValueError("half_life_weeks is not supported with opponent_adjust")
         return self
 
 
