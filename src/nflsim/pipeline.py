@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import numpy as np
 import polars as pl
@@ -279,6 +279,10 @@ def matchup_row(season: int, week: int, home: str, away: str, neutral: bool) -> 
     )
 
 
+def _no_runs() -> np.ndarray:
+    return np.zeros(0, dtype=np.int64)
+
+
 @dataclass(frozen=True)
 class MatchupResult:
     home: str
@@ -298,6 +302,9 @@ class MatchupResult:
     flags: list[str]
     model: PointsModel
     sampled_availability: bool = False
+    # Simulated scores, one per run (line probabilities, summaries).
+    home_scores: np.ndarray = field(default_factory=_no_runs, repr=False, compare=False)
+    away_scores: np.ndarray = field(default_factory=_no_runs, repr=False, compare=False)
 
 
 QUANTILES = (0.1, 0.25, 0.5, 0.75, 0.9)
@@ -394,6 +401,8 @@ def predict_matchup(
         flags=flags,
         model=model,
         sampled_availability=runs is not None,
+        home_scores=sim.home[0],
+        away_scores=sim.away[0],
     )
 
 

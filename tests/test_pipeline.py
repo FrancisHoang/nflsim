@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import numpy as np
 import polars as pl
 import pytest
 
@@ -45,6 +46,11 @@ def test_predict_matchup_reproducible_with_flags() -> None:
     assert a.model.train_games == 600  # 2019 and 2020 only; the 2021 season is excluded
     assert any("no games yet this season" in f for f in a.flags)
     assert list(a.margin_quantiles) == sorted(a.margin_quantiles)
+    # The runs behind the summary are kept (line probabilities, JSON).
+    assert a.home_scores.shape == a.away_scores.shape == (2000,)
+    assert (a.home_scores > a.away_scores).mean() == a.home_win_prob
+    assert (a.home_scores - a.away_scores).mean() == pytest.approx(a.mean_margin)
+    np.testing.assert_array_equal(a.home_scores, b.home_scores)
 
 
 def test_predict_matchup_unknown_team_raises() -> None:

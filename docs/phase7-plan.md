@@ -1,6 +1,6 @@
 # Phase 7 plan: scenarios and output
 
-Status: **in progress** (2026-11-17). Steps 1-3 (live matchups, overrides, stat lines) are done.
+Status: **in progress** (2026-11-17). Steps 1-3 (live matchups, overrides, stat lines) are done; step 4 is in progress (lines and JSON done).
 
 ## Goal
 
@@ -124,6 +124,16 @@ injuries and overrides and labeled as such in the output.
 - `nflsim week --season 2026 --week 11`: every game of a week in one table.
 - Optional Streamlit dashboard as an extra dependency group (`uv sync --extra dashboard`),
   only after the CLI is stable.
+
+**Result so far (`nflsim.summary`):** `--spread`/`--total` print home cover, push and away
+cover (over, push, under) chances from the simulated scores. The spread is the home team's
+line in sportsbook sign (-3.5 = home favored); nflverse's `spread_line` has the opposite
+sign and is converted. With no lines given, a scheduled game uses its nflverse lines
+(labeled as such); a hypothetical game shows none. `--json` prints one document (game,
+simulation, result with quantiles, lines, flags, may-not-play, overrides and the
+no-override result with `--compare`, stat lines with `exp_`/`low_`/`high_` per stat, and
+what was used) and nothing else on stdout. Predictions are unchanged, so there is no
+backtest; tests cover the line math and the JSON conversion.
 
 ### Step 5: defensive and offensive-line availability (opt-in, gated)
 
