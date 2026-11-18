@@ -154,10 +154,37 @@ rest_cap_days = 7.0
 # or errors; the effect on scoring levels off above ~20 mph).
 wind_cap_mph = 30.0
 
+[drives]
+# Drive-by-drive engine (Phase 5). Each simulated drive resamples a real drive from the
+# training seasons that started in the same field-position bin (this many yards) and
+# clock bucket (split at these seconds left in the half).
+field_bin_yards = 10.0
+clock_edges_seconds = [120.0, 420.0]
+# Team strength tilts drive outcomes toward more points (theta > 0) or fewer; theta is
+# searched in [theta_min, theta_max] to match each team's expected points.
+theta_min = -2.0
+theta_max = 2.0
+theta_steps = 401
+# Pilot runs that correct each team's target so its simulated mean points match the points
+# model (field position and overtime shift it otherwise). pilot_rounds = 0 turns this off.
+pilot_rounds = 2
+pilot_runs = 2000
+max_drives = 80
+# Overtime rule history (facts, not tuning): 10-minute regular-season overtime from 2017;
+# both teams possess from 2022 (playoffs) and 2024 (regular season).
+overtime_seconds_regular = 600.0
+overtime_seconds_playoffs = 900.0
+overtime_regular_10min_from = 2017
+both_possess_playoffs_from = 2022
+both_possess_regular_from = 2024
+
 [sim]
 # Points added to the winner when a simulated game ends tied (overtime, usually a field goal).
 # The overtime winner is drawn with probability proportional to each team's expected points.
 overtime_points = 3
+# "score": each team's points from a negative binomial (the default through Phase 6);
+# "drive": the game simulated drive by drive ([drives], Phase 5).
+engine = "score"
 # With injury-aware player features ([model] injury_aware): draw who plays separately in
 # each run (true), or give every run the expected features (false). Sampling widens the
 # score distribution when key players are uncertain. Backtest 2021-2024 (2026-11-17):

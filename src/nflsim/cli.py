@@ -131,6 +131,10 @@ def backtest(
             "(default: config sim.sample_availability).",
         ),
     ] = None,
+    engine: Annotated[
+        str | None,
+        typer.Option(help="Simulation engine: 'score' or 'drive' (default: config sim.engine)."),
+    ] = None,
     output: Annotated[
         Path | None, typer.Option(help="Write per-game predictions to this parquet file.")
     ] = None,
@@ -148,15 +152,26 @@ def backtest(
     if overrides:
         model_cfg = settings.model.model_validate({**settings.model.model_dump(), **overrides})
         settings = settings.model_copy(update={"model": model_cfg})
+    sim_updates: dict[str, object] = {}
     if sample_availability is not None:
-        sim_cfg = settings.sim.model_copy(update={"sample_availability": sample_availability})
+        sim_updates["sample_availability"] = sample_availability
+    if engine is not None:
+        sim_updates["engine"] = engine
+    if sim_updates:
+        sim_cfg = settings.sim.model_validate({**settings.sim.model_dump(), **sim_updates})
         settings = settings.model_copy(update={"sim": sim_cfg})
     test_seasons = parse_seasons(seasons)
-    games, lineup = load_games_with_lineups(DataCache(settings.data), settings, max(test_seasons))
-    predictions, fits = walk_forward(games, settings, test_seasons, n, seed, lineup)
+    cache = DataCache(settings.data)
+    games, lineup = load_games_with_lineups(cache, settings, max(test_seasons))
+    drive_table = None
+    if settings.sim.engine == "drive":
+        first = settings.data.default_first_season
+        drive_table = drives(cache.scan("pbp", list(range(first, max(test_seasons) + 1))))
+    predictions, fits = walk_forward(games, settings, test_seasons, n, seed, lineup, drive_table)
 
     typer.echo(f"features: {', '.join(settings.model.features) or '(none)'}")
     typer.echo(f"margin fit: {settings.model.margin_fit}")
+    typer.echo(f"engine: {settings.sim.engine}")
     if set(settings.model.features) & set(PLAYER_FEATURES):
         typer.echo(f"injury-aware player features: {settings.model.injury_aware}")
         if settings.model.injury_aware:

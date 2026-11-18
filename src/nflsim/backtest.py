@@ -23,7 +23,13 @@ import polars as pl
 
 from nflsim.config import Settings
 from nflsim.distribution import beat_line_probability, crps_normal, crps_samples, margin_shares
-from nflsim.model import PointsModel, fit_points_model, simulate_scores
+from nflsim.model import PointsModel, SimResult, fit_points_model, simulate_scores
+from nflsim.model.drive_engine import (
+    build_library,
+    overtime_rules,
+    simulate_drives,
+    theta_for_points,
+)
 from nflsim.pipeline import availability_runs
 
 METHODS = ("model", "vegas", "home")
@@ -54,8 +60,12 @@ def walk_forward(
     n: int,
     seed: int,
     lineup: pl.DataFrame | None = None,
+    drive_table: pl.DataFrame | None = None,
 ) -> tuple[pl.DataFrame, list[SeasonFit]]:
     """Predict each test season from a model fit on earlier seasons only.
+
+    With ``sim.engine = "drive"``, games are simulated drive by drive from
+    ``drive_table`` (``nflsim.data.drives``), using only the training seasons' drives.
 
     Returns one row per predicted game (actuals plus each method's margin, total and home
     win probability) and the fitted model for each season. Each season's simulation uses
@@ -80,9 +90,23 @@ def walk_forward(
         model = fit_points_model(train, settings.model)
         runs = availability_runs(test, model, lineup, settings, n, seed + season)
         mu_home, mu_away = model.expected_points(test, runs)
-        sim = simulate_scores(
-            mu_home, mu_away, model.dispersion, n, seed + season, settings.sim.overtime_points
-        )
+        if settings.sim.engine == "drive":
+            if drive_table is None:
+                raise ValueError("the drive engine needs drive_table (nflsim.data.drives)")
+            sim = drive_simulation(
+                drive_table,
+                train,
+                test,
+                _run_mean(mu_home),
+                _run_mean(mu_away),
+                settings,
+                n,
+                seed + season,
+            )
+        else:
+            sim = simulate_scores(
+                mu_home, mu_away, model.dispersion, n, seed + season, settings.sim.overtime_points
+            )
         # A share of n runs can be exactly 0 or 1; keep it within half a run of the edges.
         p_model = np.clip(sim.home_win_prob(), 0.5 / n, 1 - 0.5 / n)
 
@@ -116,6 +140,61 @@ def walk_forward(
             )
         )
     return pl.concat(frames, how="vertical"), fits
+
+
+def drive_simulation(
+    drive_table: pl.DataFrame,
+    train: pl.DataFrame,
+    games: pl.DataFrame,
+    mu_home: np.ndarray,
+    mu_away: np.ndarray,
+    settings: Settings,
+    n: int,
+    seed: int,
+) -> SimResult:
+    """Simulate ``games`` drive by drive, tilted so each team's expected points per drive
+    are its expected points (``mu_*``) over the expected number of drives.
+
+    The library uses the drives of ``train``'s seasons only. Expected drives per team =
+    the training games' average points per team / the library's points per drive.
+    """
+    cfg = settings.drives
+    seasons = sorted(train["season"].unique().to_list())
+    library, weights = build_library(drive_table, seasons, cfg)
+    per_drive = float(library.expected_points(np.zeros(1), weights)[0])
+    team_points = float(
+        train.select(((pl.col("home_score") + pl.col("away_score")) / 2).mean()).item()
+    )
+    drives_per_team = team_points / per_drive
+    grid = np.linspace(cfg.theta_min, cfg.theta_max, cfg.theta_steps)
+    overtime = [
+        overtime_rules(int(s), g != "REG", cfg)
+        for s, g in zip(games["season"].to_list(), games["game_type"].to_list(), strict=True)
+    ]
+    # Targets in points per drive, corrected by pilot runs so each team's simulated mean
+    # matches its expected points (field position and overtime shift it otherwise).
+    target_home, target_away = mu_home / drives_per_team, mu_away / drives_per_team
+    pilot_rng = np.random.SeedSequence(seed).spawn(cfg.pilot_rounds)
+    for child in pilot_rng:
+        pilot = simulate_drives(
+            library,
+            theta_for_points(library, weights, target_home, grid),
+            theta_for_points(library, weights, target_away, grid),
+            overtime,
+            cfg.pilot_runs,
+            int(child.generate_state(1)[0]),
+            cfg.max_drives,
+        )
+        target_home = target_home * _ratio(mu_home, pilot.home.mean(axis=1))
+        target_away = target_away * _ratio(mu_away, pilot.away.mean(axis=1))
+    theta_home = theta_for_points(library, weights, target_home, grid)
+    theta_away = theta_for_points(library, weights, target_away, grid)
+    return simulate_drives(library, theta_home, theta_away, overtime, n, seed, cfg.max_drives)
+
+
+def _ratio(want: np.ndarray, got: np.ndarray) -> np.ndarray:
+    """Correction factor want / got, kept within [0.5, 2] so one noisy pilot can't explode."""
+    return np.asarray(np.clip(want / np.maximum(got, 1e-9), 0.5, 2.0), dtype=np.float64)
 
 
 def _run_mean(mu: np.ndarray) -> np.ndarray:

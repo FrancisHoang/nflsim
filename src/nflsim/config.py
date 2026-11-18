@@ -236,6 +236,9 @@ class SimConfig(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     overtime_points: int = Field(default=3, ge=1)
+    # "score": each team's points drawn from a negative binomial (Phases 1-4, 6).
+    # "drive": the game simulated drive by drive ([drives]; Phase 5).
+    engine: Literal["score", "drive"] = "score"
     # With injury-aware player features: draw who plays in each run (True), or use the
     # expected features in every run (False).
     sample_availability: bool = True
@@ -273,6 +276,41 @@ class MatchupsConfig(BaseModel):
             raise ValueError(f"matchups.prior_dropbacks is missing {sorted(missing)}")
         if any(v <= 0 for v in self.prior_dropbacks.values()):
             raise ValueError("matchups.prior_dropbacks must be positive")
+        return self
+
+
+class DrivesConfig(BaseModel):
+    """Drive-by-drive simulation engine (Phase 5)."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    # Historical drives are resampled within cells: start field position bins of this
+    # many yards x clock buckets split at these half-seconds-remaining values.
+    field_bin_yards: float = Field(default=10.0, gt=0, le=99)
+    clock_edges_seconds: tuple[float, ...] = (120.0, 420.0)
+    # Tilt values searched to match each team's target points per drive.
+    theta_min: float = -2.0
+    theta_max: float = 2.0
+    theta_steps: int = Field(default=401, ge=3)
+    # Pilot simulations that correct each team's target so its simulated mean points match
+    # the points model (field position and overtime shift it otherwise). 0 rounds = off.
+    pilot_rounds: int = Field(default=2, ge=0)
+    pilot_runs: int = Field(default=2000, ge=100)
+    # Safety stop for the drive loop (real games have ~22 drives plus overtime).
+    max_drives: int = Field(default=80, ge=10)
+    # Overtime rules (NFL rule history, not tuning): 10-minute regular-season overtime
+    # from 2017 (15 before, and in the playoffs); both teams get the ball from 2022 in
+    # the playoffs and 2024 in the regular season.
+    overtime_seconds_regular: float = Field(default=600.0, gt=0)
+    overtime_seconds_playoffs: float = Field(default=900.0, gt=0)
+    overtime_regular_10min_from: int = 2017
+    both_possess_playoffs_from: int = 2022
+    both_possess_regular_from: int = 2024
+
+    @model_validator(mode="after")
+    def _theta_range(self) -> Self:
+        if self.theta_min >= self.theta_max:
+            raise ValueError("drives.theta_min must be below theta_max")
         return self
 
 
@@ -334,6 +372,7 @@ class Settings(BaseModel):
     injuries: InjuriesConfig = InjuriesConfig()
     matchups: MatchupsConfig = MatchupsConfig()
     context: ContextConfig = ContextConfig()
+    drives: DrivesConfig = DrivesConfig()
     sim: SimConfig = SimConfig()
     backtest: BacktestConfig = BacktestConfig()
     tuning: TuningConfig = TuningConfig()
