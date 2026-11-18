@@ -54,7 +54,12 @@ opponent_prior_ridge = 1.0
 # (95% CI [-0.20, +0.03]), better in 3 of 4 seasons, with win probability unchanged
 # (Brier 0.2254 both). That meets the rule set before testing, so they are on by default;
 # rest/opp_rest showed nothing (Brier +0.0001) and stay off.
-features = ["off_epa", "def_epa", "off_success", "def_success", "off_pace", "def_pace", "indoor", "wind"]
+# Market strength (2026-11-18, docs/underconfidence.md): adding mkt, opp_mkt (team strength
+# from earlier weeks' closing spreads, [market]) gives Brier 0.2254 -> 0.2224 (95% CI
+# [-0.0062, +0.0002]), better in 3 of 4 seasons on Brier and margin MAE; 2017-2024 CI
+# excludes 0. That meets the rule set before testing, so they are on by default. Vegas is
+# then an input: the backtest also reports `pbp_only`, this model without them.
+features = ["off_epa", "def_epa", "off_success", "def_success", "off_pace", "def_pace", "indoor", "wind", "mkt", "opp_mkt"]
 # Number of seasons before the predicted season used to fit the coefficients.
 train_seasons = 5
 # Expected points are floored here so the score distribution stays valid.

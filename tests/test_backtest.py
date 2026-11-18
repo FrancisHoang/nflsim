@@ -141,3 +141,29 @@ def test_format_table_is_ascii() -> None:
     text = format_table(pl.DataFrame({"a": [1.23456], "b": ["x"]}), [("a", 2)])
     assert text.isascii()
     assert "1.23" in text
+
+
+def with_market(games: pl.DataFrame) -> pl.DataFrame:
+    rng = np.random.default_rng(3)
+    return games.with_columns(
+        h_mkt=pl.Series(rng.normal(0, 3, games.height)),
+        a_mkt=pl.Series(rng.normal(0, 3, games.height)),
+    )
+
+
+def test_walk_forward_adds_a_pbp_only_model_when_market_features_are_used() -> None:
+    games = with_market(season_games(range(2018, 2022)))
+    plain, _ = walk_forward(games, SETTINGS, [2021], n=200, seed=7)
+    assert "pbp_only_p" not in plain.columns
+    assert "pbp_only" not in summarize(plain)["method"].to_list()
+
+    market = Settings(
+        model=ModelConfig(features=("off_epa", "def_epa", "mkt", "opp_mkt"), train_seasons=2)
+    )
+    preds, fits = walk_forward(games, market, [2021], n=200, seed=7)
+    assert fits[0].model.features == ("off_epa", "def_epa", "mkt", "opp_mkt")
+    # The pbp-only model is the plain model: same features, data and seed.
+    assert preds["pbp_only_p"].equals(plain["model_p"])
+    assert preds["pbp_only_margin"].equals(plain["model_margin"])
+    methods = summarize(preds).filter(pl.col("seasons") == "all")["method"].to_list()
+    assert methods == ["model", "pbp_only", "vegas", "home"]

@@ -19,10 +19,11 @@ from nflsim.config import MarketConfig
 
 
 def market_ratings(schedules: pl.DataFrame, config: MarketConfig) -> pl.DataFrame:
-    """``season, week, team, mkt, mkt_games`` for every team and week in ``schedules``.
+    """``season, week, team, mkt, mkt_games, mkt_prior_games`` for every team and week.
 
-    ``schedules`` must use normalized team codes. ``mkt_games`` counts the season's games
-    with a line before the week; ``mkt`` is 0 (average) with no lines at all.
+    ``schedules`` must use normalized team codes. ``mkt_games`` counts the team's games
+    this season with a line before the week, ``mkt_prior_games`` its games with a line last
+    season; ``mkt`` is 0 (average) with no lines at all.
     """
     sched = schedules.select(
         pl.col("season").cast(pl.Int32),
@@ -48,16 +49,13 @@ def market_ratings(schedules: pl.DataFrame, config: MarketConfig) -> pl.DataFram
         zeros = np.zeros(len(teams))
         prior = config.carryover * _fit(prev, index, config.prior_season_ridge, zeros)
         weeks = sorted(cur_sched["week"].unique().to_list())
+        prior_counts = _game_counts(prev, index)
         values: list[float] = []
         counts: list[int] = []
         for week in weeks:
             before = cur.filter(pl.col("week") < week)
             values.extend(_fit(before, index, config.prior_games, prior).tolist())
-            games = np.zeros(len(teams), dtype=np.int64)
-            for col in ("home_team", "away_team"):
-                for t in before[col].to_list():
-                    games[index[t]] += 1
-            counts.extend(games.tolist())
+            counts.extend(_game_counts(before, index).tolist())
         frames.append(
             pl.DataFrame(
                 {
@@ -66,11 +64,26 @@ def market_ratings(schedules: pl.DataFrame, config: MarketConfig) -> pl.DataFram
                     "team": teams * len(weeks),
                     "mkt": values,
                     "mkt_games": counts,
+                    "mkt_prior_games": prior_counts.tolist() * len(weeks),
                 },
-                schema_overrides={"season": pl.Int32, "week": pl.Int32, "mkt_games": pl.Int64},
+                schema_overrides={
+                    "season": pl.Int32,
+                    "week": pl.Int32,
+                    "mkt_games": pl.Int64,
+                    "mkt_prior_games": pl.Int64,
+                },
             )
         )
     return pl.concat(frames, how="vertical")
+
+
+def _game_counts(games: pl.DataFrame, index: dict[str, int]) -> np.ndarray:
+    """Games per team in ``games``."""
+    counts = np.zeros(len(index), dtype=np.int64)
+    for col in ("home_team", "away_team"):
+        for t in games[col].to_list():
+            counts[index[t]] += 1
+    return counts
 
 
 def _fit(

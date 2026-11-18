@@ -12,7 +12,7 @@ import polars as pl
 import typer
 
 from nflsim.backtest import calibration, format_table, summarize, walk_forward
-from nflsim.config import PLAYER_FEATURES, Settings, load_settings
+from nflsim.config import MARKET_FEATURES, PLAYER_FEATURES, Settings, load_settings
 from nflsim.data import (
     DATASETS,
     PBP_PLAYER_COLUMNS,
@@ -364,7 +364,8 @@ def simulate(
     stat_frame = None
     if players and lineup is not None:
         stat_frame = _stat_line_frame(cache, settings, lineup, r)
-    used = _used(cache, schedules, matchup, r, lineup is not None)
+    market = bool(set(settings.model.features) & set(MARKET_FEATURES))
+    used = _used(cache, schedules, matchup, r, lineup is not None, market)
 
     if json_output:
         payload = {
@@ -607,6 +608,7 @@ class _Used:
     offline: bool
     injury_aware: bool
     final: tuple[int, int] | None
+    market: bool = False  # market strength (earlier weeks' closing spreads) used
     report_error: str | None = None
     report_counts: dict[str, int] | None = None
     listed: pl.DataFrame | None = None
@@ -618,6 +620,7 @@ def _used(
     matchup: Matchup,
     r: MatchupResult,
     injury_aware: bool,
+    market: bool = False,
 ) -> _Used:
     last, done = ratings_cutoff(schedules, r.season, r.week)
     base = _Used(
@@ -628,6 +631,7 @@ def _used(
         offline=cache.offline,
         injury_aware=injury_aware,
         final=matchup.final,
+        market=market,
     )
     try:
         reports = injury_reports(cache.load("injuries", [r.season]))
@@ -645,6 +649,7 @@ def _used_dict(u: _Used) -> dict[str, object]:
         "pbp_cached_at": u.pbp_cached.isoformat(timespec="minutes") if u.pbp_cached else None,
         "offline": u.offline,
         "injury_aware": u.injury_aware,
+        "market_strength": u.market,
         "injury_report_error": u.report_error,
         "injury_report_players": u.report_counts,
         "injury_report": records(u.listed),
@@ -669,6 +674,12 @@ def _print_used(u: _Used, r: MatchupResult) -> None:
     if u.pbp_cached is not None:
         mode = " (offline: not refreshed)" if u.offline else ""
         typer.echo(f"  play-by-play cached {u.pbp_cached:%Y-%m-%d %H:%M}{mode}")
+    if u.market:
+        typer.echo(
+            f"  market strength: closing spreads of {r.season} games before week {r.week} "
+            "(never this game's line). It lags a week: a player back from injury is still "
+            "priced as out."
+        )
     if u.report_error is not None or u.report_counts is None:
         typer.echo(f"  injury report: unavailable ({u.report_error})")
         return

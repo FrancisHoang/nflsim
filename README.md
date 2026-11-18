@@ -100,7 +100,18 @@ wind met the adoption rule (total MAE better in 3 of 4 seasons) and is now a def
 | Home field without 2020 (Phase 6) | 0.2256 | 0.6440 | 10.18 |
 | + rest (Phase 6) | 0.2255 | 0.6439 | 10.18 |
 | Drive-by-drive engine (Phase 5) | 0.2251 | 0.6432 | 10.16 (CRPS margin 7.42 vs. 7.40) |
-| **+ indoor, wind (Phase 6, default)** | 0.2254 | 0.6438 | 10.17 (total MAE 10.69 -> **10.61**) |
+| + indoor, wind (Phase 6) | 0.2254 | 0.6438 | 10.17 (total MAE 10.69 -> **10.61**) |
+| Opponent-adjusted ratings, coefficient ridge, recalibration | 0.2250-0.2256 | | 10.17-10.18 |
+| **+ market strength (default since 2026-11-18)** | **0.2224** | **0.6374** | **10.11** (total MAE 10.56) |
+
+**Market strength** (`mkt`, `opp_mkt`) is each team's strength implied by the closing
+spreads of *earlier* weeks, shrunk toward last season. It is the first change that
+improves accuracy: Brier -0.0030 on 2021-2024 (95% CI [-0.0062, +0.0002], better in 3 of
+4 seasons) and -0.0042 on 2017-2024 (CI [-0.0068, -0.0015]). It also fixes most of the
+under-confidence (actual vs. predicted margin slope 1.20 -> 0.92). It uses no future
+information, but it does make the market an input, so the backtest also reports
+`pbp_only`, the same model without it, to keep an independent measure of the
+play-by-play ratings. Details: [docs/underconfidence.md](docs/underconfidence.md).
 
 ## Configuration
 

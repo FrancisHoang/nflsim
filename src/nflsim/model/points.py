@@ -111,7 +111,8 @@ def build_games(
     Context columns (``context_columns``): ``h_rest``/``a_rest``, ``indoor``, ``wind``,
     ``rest_missing``, ``wind_missing``, ``roof`` and ``roof_inferred``.
 
-    Market strength (``market_ratings``, earlier weeks' closing spreads): ``h_mkt``/``a_mkt``.
+    Market strength (``market_ratings``, earlier weeks' closing spreads): ``h_mkt``/``a_mkt``
+    with ``*_mkt_games`` (lines this season before the week) and ``*_mkt_prior_games``.
     """
     sched = normalize_teams(schedules, ["home_team", "away_team"]).cast(
         {"season": pl.Int32, "week": pl.Int32}
@@ -174,10 +175,13 @@ def build_games(
         .join(league_points_as_of(sched), on=["season", "week"], how="left")
         .join(context_columns(sched, context or ContextConfig()), on="game_id", how="left")
     )
-    mkt = market_ratings(sched, market or MarketConfig()).select("season", "week", "team", "mkt")
+    mkt_cols = ["mkt", "mkt_games", "mkt_prior_games"]
+    mkt = market_ratings(sched, market or MarketConfig()).select(
+        "season", "week", "team", *mkt_cols
+    )
     for prefix, team in (("h_", "home_team"), ("a_", "away_team")):
         games = games.join(
-            mkt.rename({"team": team, "mkt": f"{prefix}mkt"}),
+            mkt.rename({"team": team, **{c: f"{prefix}{c}" for c in mkt_cols}}),
             on=["season", "week", team],
             how="left",
         )

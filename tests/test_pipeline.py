@@ -135,3 +135,20 @@ def test_home_roof_fills_hypothetical_games_from_latest_home_game() -> None:
     assert out["SIM2"]["roof_inferred"] is False
     known = extra.with_columns(roof=pl.lit("closed"))
     assert home_roof(known, schedules)["roof"].to_list() == ["closed", "closed"]
+
+
+def test_predict_matchup_flags_teams_without_closing_lines() -> None:
+    market = Settings(
+        model=ModelConfig(features=("off_epa", "def_epa", "mkt", "opp_mkt"), train_seasons=2)
+    )
+    games = season_games(range(2019, 2022)).with_columns(
+        h_mkt=pl.lit(0.0), a_mkt=pl.lit(0.0), h_mkt_games=pl.lit(3), a_mkt_games=pl.lit(3)
+    )
+    games = with_matchup(
+        games, h_mkt_games=0, h_mkt_prior_games=17, a_mkt_games=0, a_mkt_prior_games=0
+    )
+    flags = predict_matchup(games, market, n=200, seed=1).flags
+    assert any(f.startswith("KC: no closing lines yet") and "carried over" in f for f in flags)
+    assert any(f.startswith("BUF: no closing lines cached") for f in flags)
+    plain = predict_matchup(games, SETTINGS, n=200, seed=1).flags
+    assert not any("closing lines" in f for f in plain)

@@ -10,6 +10,8 @@ reaches its prediction. Three methods are scored on the same games:
   bookmaker's margin removed, or, if a moneyline is missing, from the spread with a
   normal error whose spread is estimated on the training seasons.
 * ``home``: home-field only, from training-season averages (neutral sites get 0 and 0.5).
+* ``pbp_only``: when the model uses market strength (``mkt``, ``opp_mkt``), the same model
+  without it, so play-by-play ratings are still measured against Vegas independently.
 """
 
 from __future__ import annotations
@@ -21,7 +23,7 @@ from dataclasses import dataclass
 import numpy as np
 import polars as pl
 
-from nflsim.config import Settings
+from nflsim.config import MARKET_FEATURES, Settings
 from nflsim.distribution import beat_line_probability, crps_normal, crps_samples, margin_shares
 from nflsim.model import PointsModel, SimResult, fit_points_model, simulate_scores
 from nflsim.model.drive_engine import (
@@ -32,7 +34,18 @@ from nflsim.model.drive_engine import (
 )
 from nflsim.pipeline import availability_runs
 
-METHODS = ("model", "vegas", "home")
+METHODS = ("model", "pbp_only", "vegas", "home")
+
+
+def pbp_only_settings(settings: Settings) -> Settings | None:
+    """``settings`` without the market features, or None when it uses none."""
+    features = settings.model.features
+    if not set(features) & set(MARKET_FEATURES):
+        return None
+    kept = tuple(f for f in features if f not in MARKET_FEATURES)
+    return settings.model_copy(
+        update={"model": settings.model.model_copy(update={"features": kept})}
+    )
 
 
 def american_to_prob(odds: pl.Expr) -> pl.Expr:
@@ -116,8 +129,10 @@ def walk_forward(
         spread = base["vegas_margin"].cast(pl.Float64).fill_null(np.nan).to_numpy()
         total_line = base["vegas_total"].cast(pl.Float64).fill_null(np.nan).to_numpy()
         keys = margin_shares(sim.margin, settings.backtest.key_margins)
+        pure = _pbp_only(train, test, settings, n, seed + season, lineup)
         frames.append(
             base.with_columns(
+                **pure,
                 model_margin=pl.Series(sim.mean_margin()),
                 model_total=pl.Series(sim.mean_total()),
                 model_p=pl.Series(p_model),
@@ -140,6 +155,30 @@ def walk_forward(
             )
         )
     return pl.concat(frames, how="vertical"), fits
+
+
+def _pbp_only(
+    train: pl.DataFrame,
+    test: pl.DataFrame,
+    settings: Settings,
+    n: int,
+    seed: int,
+    lineup: pl.DataFrame | None,
+) -> dict[str, pl.Series]:
+    """``pbp_only_*`` margin, total and win probability (score engine), or nothing when
+    the model has no market features."""
+    pure = pbp_only_settings(settings)
+    if pure is None:
+        return {}
+    model = fit_points_model(train, pure.model)
+    runs = availability_runs(test, model, lineup, pure, n, seed)
+    mu_home, mu_away = model.expected_points(test, runs)
+    sim = simulate_scores(mu_home, mu_away, model.dispersion, n, seed, pure.sim.overtime_points)
+    return {
+        "pbp_only_margin": pl.Series(sim.mean_margin()),
+        "pbp_only_total": pl.Series(sim.mean_total()),
+        "pbp_only_p": pl.Series(np.clip(sim.home_win_prob(), 0.5 / n, 1 - 0.5 / n)),
+    }
 
 
 def drive_simulation(
@@ -295,6 +334,8 @@ def summarize(predictions: pl.DataFrame) -> pl.DataFrame:
     groups.append(("all", scored))
     for label, frame in groups:
         for method in METHODS:
+            if f"{method}_p" not in frame.columns:
+                continue
             rows.append(
                 {
                     "seasons": label,

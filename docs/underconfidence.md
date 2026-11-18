@@ -65,8 +65,13 @@ The gap to Vegas (Brier 0.2224 vs. 0.2112) is still large.
 **Caveat:** with market strength the closing lines of earlier weeks become an input. That
 is not leakage (they are public before kickoff, and the game's own line is never used),
 but Vegas is then no longer an independent benchmark: beating it would partly mean
-re-using it. Whether to make it the default is a project decision, so the default is
-unchanged for now and `mkt`, `opp_mkt` are opt-in.
+re-using it. **Decision (2026-11-18):** market strength is on by default. Better predictions for real
+games outweigh a fully independent Vegas comparison, and the backtest keeps one: it also
+reports `pbp_only`, the same model without `mkt`/`opp_mkt`. Simulations flag teams with no
+closing lines yet (last season's strength is used, carried over) and note that market
+strength lags a week (a player back from injury is still priced as out). Recalibration is
+not adopted: it fixes the slope (0.92 -> 1.08) but not Brier, and CRPS gets slightly
+worse (7.336 -> 7.360).
 
 Recalibration is not built into the CLI yet (it was run as a script on top of
 `walk_forward`). The market settings (`prior_games` 4, `carryover` 0.6) were chosen before
