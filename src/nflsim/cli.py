@@ -14,11 +14,21 @@ from nflsim.data import (
     DATASETS,
     PBP_PLAYER_COLUMNS,
     DataCache,
+    depth_chart_weeks,
     id_coverage,
+    injury_reports,
     parse_seasons,
     player_snaps,
     roster_weeks,
     unmatched_snaps,
+)
+from nflsim.injury_eval import (
+    brier_scores,
+    coverage,
+    depth_coverage,
+    position_table,
+    rate_table,
+    report_outcomes,
 )
 from nflsim.model.players import player_game_stats, usage_history
 from nflsim.pipeline import load_games, matchup_row, predict_matchup
@@ -291,6 +301,56 @@ def player_coverage(
         else:
             typer.echo(f"\nMost-used unmatched snap-count players (top {top}):")
             typer.echo(format_table(worst, [("offense_snaps", 0), ("defense_snaps", 0)]))
+
+
+@app.command("injury-eval")
+def injury_eval(
+    seasons: Annotated[str, typer.Option(help="Seasons to measure, e.g. '2016-2025'.")] = (
+        "2016-2025"
+    ),
+    config: ConfigOption = None,
+) -> None:
+    """Measure how often players on the injury report play, vs. the configured rates."""
+    settings = load_settings(config)
+    wanted = parse_seasons(seasons)
+    cache = DataCache(settings.data)
+    cfg = settings.injuries
+    # One season earlier, so week 1 knows who the regulars were.
+    first = max(min(wanted) - 1, cache.spec("snap_counts").first_season or 0)
+    players = cache.load("players")
+    snaps = player_snaps(cache.load("snap_counts", range(first, max(wanted) + 1)), players)
+    rosters = roster_weeks(cache.load("rosters_weekly", wanted), players)
+    reports = injury_reports(cache.load("injuries", wanted))
+    in_range = pl.col("season").is_in(wanted)
+    ruled_out = settings.player_ratings.unavailable_statuses
+    outcomes = report_outcomes(reports, snaps, cfg.regular_min_share, rosters, ruled_out).filter(
+        in_range
+    )
+    snaps = snaps.filter(in_range)
+
+    typer.echo(f"Injury report coverage ({seasons}):")
+    typer.echo(format_table(coverage(reports, snaps), []))
+    depth = depth_chart_weeks(cache.load("depth_charts", wanted), cache.load("schedules", wanted))
+    typer.echo("\nDepth charts (starters = depth 1 on offense/defense):")
+    typer.echo(
+        format_table(
+            depth_coverage(depth, snaps),
+            [("charted", 3), ("starters_played", 3), ("qb_starter_led", 3)],
+        )
+    )
+
+    typer.echo(
+        f"\nPlay rate by final report (regular: >= {cfg.regular_min_share:.0%} of offensive "
+        "or defensive snaps in the previous game; players with weekly roster status "
+        f"{', '.join(ruled_out)} left out)"
+    )
+    rate_digits = [(c, 3) for c in ("observed", "config", "diff")]
+    typer.echo(format_table(rate_table(outcomes, cfg), rate_digits))
+    typer.echo("\nQuestionable regulars by position:")
+    typer.echo(format_table(position_table(outcomes, cfg), rate_digits))
+    typer.echo("\nBrier score of play predictions (lower is better):")
+    briers = brier_scores(outcomes, cfg)
+    typer.echo(format_table(briers, [("played", 3), *[(c, 4) for c in briers.columns[3:]]]))
 
 
 @app.command("player-eval")
