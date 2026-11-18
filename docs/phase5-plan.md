@@ -65,8 +65,15 @@ Report the current default on these first; it is the benchmark for this phase.
 One row per drive from play-by-play (`fixed_drive`): game, offense, defense, start field
 position, start clock and score difference, result (touchdown, field goal, missed field
 goal, punt, turnover, turnover on downs, safety, opponent touchdown, end of half), points,
-end field position and time used. Coverage report by season. About 28.6 drives per game
-(27.4 in 2025, falling).
+end field position and time used. Coverage report by season.
+
+**Result (done, `nflsim.data.drives`, `nflsim drive-eval`):** 21.2-23.2 drives per game
+(falling: 23.0 in 2016, 21.2 in 2025), 1.8-2.2 offensive points per drive, about 160-171
+seconds per drive. Drive points add up to both final scores in 100% of games, every
+season. Points come from the running home/away score: after a defensive touchdown the
+extra point is credited to the other team within the same drive, so per-play `posteam`
+scores would miscount (the first version matched only 69-78% of games). (The plan's
+earlier "28.6 per game" counted rows with no team on offense.)
 
 ### Step 2: league-average drive engine (no team ratings)
 
