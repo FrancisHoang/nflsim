@@ -260,3 +260,87 @@ def test_game_page_renders_and_passes_what_ifs(game_app: AppTest) -> None:
     assert isinstance(game, GameRequest) and (game.home, game.away, game.week) == ("KC", "BUF", 3)
     assert out == ("00-qb",)
     assert at.metric[0].delta is not None  # compared with the run without the what-if
+
+
+# Results page ---------------------------------------------------------------------------
+
+
+@pytest.fixture(scope="module")
+def backtest_preds() -> pl.DataFrame:
+    from nflsim.backtest import walk_forward
+    from tests.test_backtest import SETTINGS as BT_SETTINGS
+    from tests.test_backtest import season_games
+
+    preds, _ = walk_forward(season_games(range(2018, 2023)), BT_SETTINGS, [2021, 2022], 200, 7)
+    return preds
+
+
+def test_results_tables_match_the_harness(backtest_preds: pl.DataFrame) -> None:
+    from nflsim.backtest import summarize
+    from nflsim.dashboard.results import headline, method_table, season_range, season_table
+
+    overall = summarize(backtest_preds).filter(pl.col("seasons") == "all")
+    model = overall.filter(pl.col("method") == "model").row(0, named=True)
+    table = method_table(backtest_preds)
+    assert table["Method"].to_list()[0] == "nflsim"
+    assert table["Brier"][0] == pytest.approx(model["brier"])
+    assert headline(backtest_preds)["Margin MAE"][0] == pytest.approx(model["margin_mae"])
+    assert season_table(backtest_preds)["Season"].to_list() == ["2021", "2022"]
+    assert season_range(backtest_preds) == "2021-2022"
+
+
+def test_calibration_data_and_backtest_files(backtest_preds: pl.DataFrame, tmp_path: Path) -> None:
+    from nflsim.dashboard.results import backtest_files, calibration_data
+
+    cal = calibration_data(backtest_preds)
+    assert set(cal["source"]) <= {"nflsim", "Vegas closing line"}
+    assert (cal["games"] >= 10).all()
+    assert backtest_files(tmp_path / "missing") == []
+    for name in ("default_2017-2024", "default_2021-2024"):
+        backtest_preds.write_parquet(tmp_path / f"{name}.parquet")
+    assert [p.stem for p in backtest_files(tmp_path)] == ["default_2021-2024", "default_2017-2024"]
+
+
+def test_experiment_record_loads_with_links(tmp_path: Path) -> None:
+    from nflsim.dashboard.results import EXPERIMENTS_CSV, experiments
+
+    record = experiments()
+    assert record is not None and EXPERIMENTS_CSV.exists()
+    adopted = record.filter(pl.col("adopted"))["experiment"].to_list()
+    assert "Market strength" in adopted and "Quarterback change" in adopted
+    assert record["link"].drop_nulls().str.starts_with("https://github.com/").all()
+    assert experiments(tmp_path / "none.csv") is None
+
+
+@pytest.fixture
+def results_app(
+    monkeypatch: pytest.MonkeyPatch, backtest_preds: pl.DataFrame, tmp_path: Path
+) -> AppTest:
+    from nflsim.dashboard import data
+
+    monkeypatch.setattr(data, "backtests", lambda: ["x/default_2021-2022.parquet"])
+    monkeypatch.setattr(data, "predictions", lambda path: backtest_preds)
+    script = tmp_path / "results_only.py"
+    script.write_text("from nflsim.dashboard import results_page\n\nresults_page.render()\n")
+    return AppTest.from_file(str(script), default_timeout=60)
+
+
+def test_results_page_renders_and_filters_seasons(results_app: AppTest) -> None:
+    at = results_app.run()
+    assert not at.exception
+    assert at.title[0].value == "How good is it"
+    assert [m.label for m in at.metric] == ["Brier", "Margin MAE", "Total MAE"]
+    at.multiselect(key="results_seasons").set_value([2022]).run()
+    assert not at.exception
+    assert list(at.dataframe[1].value["Season"]) == ["2022"]
+
+
+def test_results_page_without_a_backtest_says_how_to_make_one(
+    results_app: AppTest, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from nflsim.dashboard import data
+
+    monkeypatch.setattr(data, "backtests", lambda: [])
+    at = results_app.run()
+    assert not at.exception
+    assert "nflsim backtest" in at.info[0].value

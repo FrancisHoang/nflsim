@@ -147,6 +147,10 @@ first).
   margins against the Vegas line, score ranges, cover and over chances (also against your
   own line), what-ifs (rule a player out or make him doubtful, compared with the same
   seed), players who may not play, and per-player stat lines.
+- **How good is it:** the walk-forward backtest (every method on the same games, by
+  season, calibration against Vegas) and every experiment with its 95% interval. It reads
+  saved predictions from `data/backtest/`; make one with
+  `uv run nflsim backtest --seasons 2021-2024 --n 10000 --seed 42 --output data/backtest/default_2021-2024.parquet`.
 
 Every simulation takes an explicit seed. To use player ratings and injury reports, pass a
 config with the player features and `injury_aware = true` under `[model]`; `simulate`

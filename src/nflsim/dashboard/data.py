@@ -13,6 +13,7 @@ import polars as pl
 import streamlit as st
 
 from nflsim.config import Settings, load_settings
+from nflsim.dashboard.results import backtest_files
 from nflsim.data import DataCache, normalize_teams, roster_weeks
 from nflsim.game import GameRequest, GameRun, run_game
 from nflsim.live import find_matchup
@@ -129,12 +130,31 @@ def game_run(
     )
 
 
+def backtest_folder() -> Path:
+    """Where saved backtest predictions live: ``<cache_dir>/backtest``."""
+    return Path(settings().data.cache_dir) / "backtest"
+
+
+@st.cache_data(ttl=600, show_spinner=False)
+def backtests() -> list[str]:
+    """Saved backtest prediction files (``nflsim backtest --output``), by name."""
+    return [str(p) for p in backtest_files(backtest_folder())]
+
+
+@st.cache_data(ttl=3600, show_spinner=False, max_entries=8)
+def predictions(path: str) -> pl.DataFrame:
+    return pl.read_parquet(path)
+
+
 __all__ = [
     "CONFIG_ENV",
+    "backtest_folder",
+    "backtests",
     "cache",
     "game_games",
     "game_run",
     "games",
+    "predictions",
     "roster",
     "seasons",
     "settings",
