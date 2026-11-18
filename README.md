@@ -3,17 +3,68 @@
 [![CI](https://github.com/FrancisHoang/nflsim/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/FrancisHoang/nflsim/actions/workflows/ci.yml)
 
 A Monte Carlo NFL game simulator. Given two teams and a week, it simulates the game many
-times and reports win probability, score distributions, spread, total, and player stat
-lines, accounting for season stats, player matchups, and injuries on both rosters.
+times and reports win probability, score distributions, spread, total and player stat
+lines. It uses play-by-play team ratings, player ratings, injury reports for both rosters,
+weather and earlier weeks' betting markets, all as of kickoff.
 
-> **Status:** Phases 0-3 and 6 done; Phases 4 and 5 tested and stopped (no gain). The game
-> simulator and backtest harness work. Context (indoor, wind) is in the default model;
-> player, injury and matchup features are built but opt-in because they have not beaten
-> the baseline. See the [roadmap](#roadmap).
+![Win probability accuracy: home field only 0.2474, play-by-play ratings only 0.2229, nflsim 0.2195, Vegas closing line 0.2112](docs/img/accuracy.png)
 
-NFL outcomes are high-variance. The goal is a **well-calibrated** model, not certainty:
-every phase is backtested against the Phase 1 baseline, and a phase that doesn't improve
-on it is reported as such.
+**At a glance**
+
+- **Honest evaluation.** A walk-forward backtest over 1,139 games (2021-2024): each season
+  is predicted from a model fit only on earlier seasons, with ratings built only from games
+  before kickoff. Margin MAE 10.06 vs. 9.79 for the Vegas closing line; Brier 0.2195 vs.
+  0.2112.
+- **Every idea is tested against a rule set before running it.** 17 experiments, 3
+  adopted. The rest (player ratings, injury-aware lineups, matchups, a drive-by-drive
+  engine, rest, recency weighting...) are built, documented and opt-in, with the numbers
+  that kept them out. [The full record](#what-was-tested).
+- **Calibrated, not just accurate.** Win probabilities track actual win rates (see
+  [calibration](#calibration)); scores are full distributions, scored with CRPS, cover
+  and over chances and key-number frequencies.
+- **Reproducible.** Every simulation takes an explicit seed; every tunable number lives in
+  a config file; tests never touch the network. Python 3.11+, polars, strict mypy, CI on
+  every pull request.
+
+NFL outcomes are high-variance. The goal is a **well-calibrated** model, not certainty.
+
+## How it works
+
+1. **Data.** [nflverse](https://github.com/nflverse) play-by-play, schedules, rosters,
+   injury reports, depth charts and snap counts, cached as parquet.
+2. **Ratings, as of week W.** Team offense and defense (EPA per play, success rate, pace)
+   from the season's games before W, shrunk toward the league average and last season
+   (empirical Bayes). Market strength from earlier weeks' closing spreads. The starting
+   quarterback's rating against the quarterbacks the team ratings were built on.
+3. **Points model.** A regression of each team's points on those features, refit each
+   season on the five seasons before it.
+4. **Simulation.** Each team's score is drawn from a negative binomial around its expected
+   points, 10,000 times. With injury-aware settings, who plays is drawn per run from the
+   injury report, and backups move up the depth chart at their own ratings.
+5. **Output.** Win probability, score and margin quantiles, cover and over chances
+   against any line, per-player stat lines with ranges, and flags wherever data was
+   missing and a coarser estimate was used.
+
+## Example
+
+`nflsim week` simulates every game of a week (here 2025 week 12, already played, so the
+final score is shown; kickoff column cut here):
+
+```
+$ uv run nflsim week --season 2025 --week 12 --n 10000 --seed 42
+     game  home win      model      vegas  home covers  total  vegas total   over  final
+---------  --------  ---------  ---------  -----------  -----  -----------  -----  -----
+BUF @ HOU     30.4%   HOU +6.8   HOU +5.5        47.0%   47.7         43.5  59.4%  23-19
+ IND @ KC     59.4%    KC -3.4    KC -3.5        49.2%   52.0         50.5  50.3%  23-20
+ MIN @ GB     85.0%   GB -12.4    GB -6.5        67.1%   42.4         41.5  48.8%   23-6
+ NE @ CIN     47.3%   CIN +0.9   CIN +7.5        69.1%   49.8         50.5  44.0%  20-26
+NYG @ DET     85.4%  DET -14.4  DET -14.0        47.4%   49.1         50.5  42.7%  34-27
+  ...
+```
+
+`nflsim simulate` goes deeper on one game: score quantiles, per-player stat lines, a
+"What I used" block (ratings date, listed starters, the injury report for both teams) and
+what-ifs such as `--out "Patrick Mahomes" --compare`.
 
 ## Install
 
@@ -80,56 +131,77 @@ uv run nflsim backtest --seasons 2021-2024 --n 10000 --seed 42
 
 Every simulation takes an explicit seed. To use player ratings and injury reports, pass a
 config with the player features and `injury_aware = true` under `[model]`; `simulate`
-then draws who plays in each run and lists players on the injury report who may not play. The CLAUDE.md command list covers the
-evaluation tools (`tune`, `player-eval`, `injury-eval`, `player-coverage`).
+then draws who plays in each run and lists players on the injury report who may not
+play. The CLAUDE.md command list covers the evaluation tools (`tune`, `player-eval`,
+`injury-eval`, `matchup-eval`, `drive-eval`, `stat-eval`, `player-coverage`).
 
 ## Results
 
-Phase 1 baseline, the benchmark every later phase is compared to (`nflsim backtest
---seasons 2021-2024 --n 10000 --seed 42`, 1,139 games):
+`nflsim backtest --seasons 2021-2024 --n 10000 --seed 42`, 1,139 games, every game
+predicted from information available before kickoff:
 
 | Method | Margin MAE | Total MAE | Brier | Log loss |
 |---|---|---|---|---|
-| Model | 10.17 | 10.69 | 0.2254 | 0.6437 |
-| Vegas close | 9.79 | 10.29 | 0.2112 | 0.6115 |
+| **nflsim (current default)** | **10.06** | **10.44** | **0.2195** | **0.6307** |
+| nflsim without market inputs (`pbp_only`) | 10.14 | 10.46 | 0.2229 | 0.6381 |
+| Phase 1 baseline (team ratings only) | 10.17 | 10.69 | 0.2254 | 0.6437 |
+| Vegas closing line | 9.79 | 10.29 | 0.2112 | 0.6115 |
 | Home field only | 11.00 | 10.90 | 0.2474 | 0.6893 |
 
-Later changes on the same games (paired bootstrap). None is significant; only indoor +
-wind met the adoption rule (total MAE better in 3 of 4 seasons) and is now a default:
+Vegas is still better, by about a quarter of a point of margin MAE and 0.008 Brier. The
+closing line knows things this model does not: this week's injury news, weather at
+kickoff, and the market's read of each matchup.
 
-| Change | Brier | Log loss | Margin MAE |
-|---|---|---|---|
-| Direct margin fit | 0.2246 | 0.6428 | 10.18 |
-| + player features (Phase 2) | 0.2255 | 0.6436 | 10.20 |
-| + injury-aware player features (Phase 3) | 0.2250 | 0.6428 | 10.18 |
-| ... with who plays drawn per run | 0.2250 | 0.6428 | 10.18 |
-| Pass-rush matchup (Phase 4) | not added: failed its play-level gate | | |
-| Home field without 2020 (Phase 6) | 0.2256 | 0.6440 | 10.18 |
-| + rest (Phase 6) | 0.2255 | 0.6439 | 10.18 |
-| Drive-by-drive engine (Phase 5) | 0.2251 | 0.6432 | 10.16 (CRPS margin 7.42 vs. 7.40) |
-| + indoor, wind (Phase 6) | 0.2254 | 0.6438 | 10.17 (total MAE 10.69 -> **10.61**) |
-| Opponent-adjusted ratings, coefficient ridge, recalibration | 0.2250-0.2256 | | 10.17-10.18 |
-| + market strength (default since 2026-11-18) | 0.2224 | 0.6374 | 10.11 (total MAE 10.56) |
-| **+ quarterback change (default since 2026-11-18)** | **0.2195** | **0.6307** | **10.06** (total MAE **10.44**) |
+Two inputs use earlier weeks' Vegas lines (market strength, below), so the backtest also
+reports `pbp_only`, the same model without them, as an independent measure of the
+play-by-play ratings.
 
-**Market strength** (`mkt`, `opp_mkt`) is each team's strength implied by the closing
-spreads of *earlier* weeks, shrunk toward last season. It is the first change that
-improves accuracy: Brier -0.0030 on 2021-2024 (95% CI [-0.0062, +0.0002], better in 3 of
-4 seasons) and -0.0042 on 2017-2024 (CI [-0.0068, -0.0015]). It also fixes most of the
-under-confidence (actual vs. predicted margin slope 1.20 -> 0.92). It uses no future
-information, but it does make the market an input, so the backtest also reports
-`pbp_only`, the same model without it, to keep an independent measure of the
-play-by-play ratings. Details: [docs/underconfidence.md](docs/underconfidence.md).
-The same idea for totals (`mkt_tot`, `opp_mkt_tot`, scoring tendency from earlier weeks'
-closing totals) did not help (total MAE -0.01, not significant) and stays opt-in:
-[docs/market-totals.md](docs/market-totals.md).
+### Calibration
 
-**Quarterback change** (`qb_change`) is this week's starting QB's rating minus the rating of
-the QBs the team's ratings were built on. Most of the remaining gap to Vegas was late-season
-games with a backup or new quarterback; this closes part of it: Brier -0.0029 (95% CI
-[-0.0052, -0.0004]), significant on 2017-2024 too. The starter is the one nflverse lists
-(for past games the actual starter, so the backtest is slightly optimistic); `simulate`
-prints it and `--out` replaces him with his backup. Details: [docs/qb-change.md](docs/qb-change.md).
+![Calibration: predicted vs. actual home win rate for nflsim and Vegas](docs/img/calibration.png)
+
+Both track the diagonal from 35% to 85%. Below 30% the model is off: in the 98 games
+where it gave the home team under 30% (23% on average), home teams won 35%. Vegas's
+under-30% games (105, 23% on average) won 24%. Actual vs. predicted margin
+slope is 0.93 (1.00 = calibrated; the Phase 1 baseline was 1.20, under-confident).
+
+### What was tested
+
+![Brier difference with 95% interval for each of 17 experiments; three adopted](docs/img/experiments.png)
+
+Each change was compared with the model it would replace on the same games (paired game
+bootstrap), against an adoption rule written down before the run. The record is
+[docs/experiments.csv](docs/experiments.csv); each experiment has a write-up in `docs/`.
+
+What worked was **information the model did not have**:
+
+- **Market strength** (`mkt`, `opp_mkt`): each team's strength implied by the closing
+  spreads of *earlier* weeks, shrunk toward last season. Brier -0.0030 (95% CI [-0.0062,
+  +0.0002], better in 3 of 4 seasons; -0.0042 on 2017-2024, CI [-0.0068, -0.0015]). It
+  also fixed most of the under-confidence (slope 1.20 -> 0.92).
+  [docs/underconfidence.md](docs/underconfidence.md)
+- **Quarterback change** (`qb_change`): this week's starter's rating minus the rating of
+  the quarterbacks the team ratings were built on. Most of the remaining gap to Vegas was
+  late-season games with a backup quarterback. Brier -0.0029 (95% CI [-0.0052, -0.0004]).
+  The starter is the one nflverse lists, which for past games is the actual starter, so
+  this backtest is slightly optimistic. [docs/qb-change.md](docs/qb-change.md)
+- **Indoor and wind**: total MAE -0.09 (3 of 4 seasons). Wind lowers the total by about
+  4 points per 10 mph. [docs/phase6-plan.md](docs/phase6-plan.md)
+
+What did not: **reshaping what the model already knew.** Player-level ratings, injury-
+aware lineups, pass-rush matchups, a drive-by-drive engine, opponent adjustment, rest,
+home-field variants, recalibration, recency weighting and market totals all landed
+within noise of the benchmark. Shrinkage already balances signal and noise in the team
+ratings, and the team ratings already reflect the players who have been playing. These
+stay in the code as opt-in options, with their results in
+[`default_config.toml`](src/nflsim/default_config.toml) next to each setting.
+
+To redraw the figures:
+
+```sh
+uv run nflsim backtest --seasons 2021-2024 --n 10000 --seed 42 --output preds.parquet
+uv run --group docs python scripts/make_figures.py preds.parquet
+```
 
 ## Configuration
 
@@ -161,7 +233,7 @@ CI runs all four on Python 3.11 and 3.12 for every push and pull request. See
 | 4 | Position-group and individual matchups | ⛔ stopped: pass-rush matchup tested, no gain ([plan and results](docs/phase4-plan.md)) |
 | 5 | Tendencies, game script, drive/play-level engine | ⛔ drive engine built (opt-in), no gain at its gate; game script not built ([plan and results](docs/phase5-plan.md)) |
 | 6 | Context: home field, rest, travel, weather, coaching | ✅ indoor + wind by default; home field and rest no gain ([plan and results](docs/phase6-plan.md)) |
-| 7 | Scenarios ("QB1 out"), CLI output, optional dashboard | |
+| 7 | Scenarios ("QB1 out"), CLI output, market strength, quarterback change, dashboard | in progress: CLI and scenarios done; dashboard next |
 
 ## License
 
