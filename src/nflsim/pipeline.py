@@ -25,6 +25,7 @@ from nflsim.model import (
 )
 from nflsim.model.availability import (
     depth_ranks,
+    expected_lineups,
     expected_role_values,
     lineups,
     player_availability,
@@ -33,6 +34,11 @@ from nflsim.model.availability import (
     uncertain_players,
 )
 from nflsim.model.players import player_game_stats, rated_usage, team_player_features
+from nflsim.model.stat_lines import (
+    expected_stats,
+    player_rates_as_of,
+    team_volume_as_of,
+)
 
 MATCHUP_ID = "SIM"
 # Second entry of the seed sequence for availability draws, so they never share a
@@ -212,6 +218,31 @@ def home_roof(extra: pl.DataFrame, schedules: pl.DataFrame) -> pl.DataFrame:
         .otherwise(pl.col("roof"))
         .alias("roof")
     ).drop("_roof")
+
+
+def expected_stat_lines(
+    box: pl.DataFrame,
+    positions: pl.DataFrame,
+    lineup: pl.DataFrame,
+    targets: pl.DataFrame,
+    settings: Settings,
+) -> pl.DataFrame:
+    """Expected stats for every player in the injury-aware ``lineup`` of ``targets``
+    team-weeks (``nflsim.model.stat_lines``). ``box`` from ``box_scores``; ``positions``
+    is ``season, week, gsis_id, position`` (``nflsim.data.roster_weeks``)."""
+    keys = targets.select("season", "week", "team").unique()
+    players, _ = expected_lineups(lineup.join(keys, on=["season", "week", "team"], how="semi"))
+    shares = players.select(
+        "season", "week", "team", "gsis_id", "role", pl.col("expected_share").alias("share")
+    )
+    player_keys = (
+        shares.select("season", "week", "gsis_id")
+        .unique()
+        .join(positions, on=["season", "week", "gsis_id"], how="left")
+    )
+    volume = team_volume_as_of(box, keys, settings.stat_lines)
+    rates = player_rates_as_of(box, positions, player_keys, settings.stat_lines)
+    return expected_stats(shares, volume, rates)
 
 
 def matchup_row(season: int, week: int, home: str, away: str, neutral: bool) -> pl.DataFrame:

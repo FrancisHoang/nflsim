@@ -328,6 +328,56 @@ class ContextConfig(BaseModel):
     wind_cap_mph: float = Field(default=30.0, gt=0)
 
 
+Opportunity = Literal["attempts", "carries", "targets"]
+
+
+class StatLinesConfig(BaseModel):
+    """Per-player stat lines (Phase 7): team volume x player share x player rate."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    # Team volume per game is shrunk toward the league with this many games of prior.
+    volume_prior_games: float = Field(default=4.0, gt=0)
+    # Weight of last season's games and plays relative to this season's.
+    carryover: float = Field(default=0.3, ge=0, le=1)
+    # Player rates are shrunk toward the position average with this many opportunities.
+    rate_prior: dict[Opportunity, float] = {"attempts": 75.0, "carries": 30.0, "targets": 20.0}
+    # Range shown for each stat (quantiles of the scaled error).
+    low_quantile: float = Field(default=0.1, gt=0, lt=0.5)
+    high_quantile: float = Field(default=0.9, gt=0.5, lt=1)
+    # Player-games with a smaller expected value are left out when fitting ranges.
+    min_expected: float = Field(default=0.5, ge=0)
+    # `simulate --players` shows players with at least this many expected total yards.
+    display_min_yards: float = Field(default=10.0, ge=0)
+    # Range shown by `simulate --players`: expected + q * sqrt(expected), with these
+    # quantiles of the scaled error, measured by `nflsim stat-eval` on 2018-2022.
+    range_low: dict[str, float] = {
+        "passing_yards": -6.069,
+        "passing_tds": -1.202,
+        "rushing_yards": -4.084,
+        "rushing_tds": -0.926,
+        "receptions": -1.246,
+        "receiving_yards": -4.321,
+        "receiving_tds": -0.849,
+    }
+    range_high: dict[str, float] = {
+        "passing_yards": 12.140,
+        "passing_tds": 1.282,
+        "rushing_yards": 6.157,
+        "rushing_tds": 0.899,
+        "receptions": 1.934,
+        "receiving_yards": 7.918,
+        "receiving_tds": 0.695,
+    }
+
+    @model_validator(mode="after")
+    def _all_opportunities(self) -> Self:
+        missing = {"attempts", "carries", "targets"} - set(self.rate_prior)
+        if missing:
+            raise ValueError(f"stat_lines.rate_prior is missing {sorted(missing)}")
+        return self
+
+
 class BacktestConfig(BaseModel):
     """Walk-forward backtest settings."""
 
@@ -373,6 +423,7 @@ class Settings(BaseModel):
     matchups: MatchupsConfig = MatchupsConfig()
     context: ContextConfig = ContextConfig()
     drives: DrivesConfig = DrivesConfig()
+    stat_lines: StatLinesConfig = StatLinesConfig()
     sim: SimConfig = SimConfig()
     backtest: BacktestConfig = BacktestConfig()
     tuning: TuningConfig = TuningConfig()

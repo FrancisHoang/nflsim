@@ -1,6 +1,6 @@
 # Phase 7 plan: scenarios and output
 
-Status: **in progress** (2026-11-17). Steps 1 (live matchups) and 2 (overrides) are done.
+Status: **in progress** (2026-11-17). Steps 1-3 (live matchups, overrides, stat lines) are done.
 
 ## Goal
 
@@ -94,6 +94,27 @@ Evaluated out of sample against box scores (`player_stats`, to be cached), 2023-
 mean absolute error and 10-90% interval coverage vs. a simple baseline (season-to-date
 average). Shipped if it beats that baseline; otherwise reported and kept as
 "usage x average" only.
+
+**Result (done, `nflsim.model.stat_lines`, `nflsim stat-eval`, `simulate --players`):**
+expected stat = team volume x expected share (injury-aware lineup, so injuries and
+overrides flow through) x shrunk player rate. A QB's rushing is rated per pass attempt
+(mostly scrambles on dropbacks); with per-carry rates QB rushing was badly underestimated.
+Settings chosen on 2018-2022 (they matter little: 0.1% error between best and starting
+values). Holdout 2023-2025 vs. each player's per-game average, 95% CIs from resampling games:
+
+| Stat | Model MAE | Baseline MAE | Diff [95% CI] | Inside 10-90% range |
+|---|---|---|---|---|
+| Passing yards | 61.0 | 63.7 | -2.7 [-5.0, -0.2] | 79.9% |
+| Passing TDs | 0.880 | 0.944 | -0.064 [-0.085, -0.041] | 78.4% |
+| Rushing yards | 13.5 | 13.2 | **+0.27 [+0.05, +0.47]** | 76.8% |
+| Rushing TDs | 0.608 | 0.665 | -0.057 [-0.073, -0.041] | 78.5% |
+| Receptions | 1.373 | 1.397 | -0.024 [-0.038, -0.011] | 81.5% |
+| Receiving yards | 16.5 | 17.1 | -0.62 [-0.78, -0.46] | 81.4% |
+| Receiving TDs | 0.479 | 0.611 | -0.132 [-0.149, -0.115] | 77.6% |
+
+Shipped: the model beats the baseline on 6 of 7 stats. **Rushing yards are 2% worse** (the
+designed-run share is a weak signal for running backs' carries); kept for consistency with
+injuries and overrides and labeled as such in the output.
 
 ### Step 4: summaries and output
 

@@ -178,6 +178,28 @@ overtime_regular_10min_from = 2017
 both_possess_playoffs_from = 2022
 both_possess_regular_from = 2024
 
+[stat_lines]
+# Per-player stat lines (Phase 7): team volume x player share x player rate, all from
+# games before the week. Chosen on 2018-2022 by mean absolute error (grid: volume prior
+# 2-16 games, carryover 0.3-0.9, rate priors x0.5-x4); the settings matter little (best vs.
+# starting values: 0.1% lower error). `nflsim stat-eval` checks them on 2023-2025.
+volume_prior_games = 4.0
+carryover = 0.3
+rate_prior = { attempts = 75.0, carries = 30.0, targets = 20.0 }
+low_quantile = 0.1
+high_quantile = 0.9
+min_expected = 0.5
+# `simulate --players` lists players with at least this many expected total yards.
+display_min_yards = 10.0
+# Ranges shown by `simulate --players`: expected + q * sqrt(expected), q = these scaled-error
+# quantiles (10% / 90%), measured by `nflsim stat-eval` on 2018-2022.
+# Check on 2023-2025 (stat-eval): actual results fell inside 77-82% of the time. Model vs.
+# each player's per-game average (MAE): better for passing yards (-4%), passing TDs (-7%),
+# rushing TDs (-9%), receptions (-2%), receiving yards (-4%) and receiving TDs (-22%), all
+# with CIs below 0; WORSE for rushing yards (+2%, CI [+0.05, +0.47] yards).
+range_low = { passing_yards = -6.069, passing_tds = -1.202, rushing_yards = -4.084, rushing_tds = -0.926, receptions = -1.246, receiving_yards = -4.321, receiving_tds = -0.849 }
+range_high = { passing_yards = 12.140, passing_tds = 1.282, rushing_yards = 6.157, rushing_tds = 0.899, receptions = 1.934, receiving_yards = 7.918, receiving_tds = 0.695 }
+
 [sim]
 # Points added to the winner when a simulated game ends tied (overtime, usually a field goal).
 # The overtime winner is drawn with probability proportional to each team's expected points.
