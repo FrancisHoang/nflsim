@@ -11,6 +11,28 @@ are reported whether or not they help.
 v0.1.0 and v0.2.0 were tagged after the fact, at the commits that finished those phases.
 The package version in `pyproject.toml` was 0.1.0 until 0.3.0.
 
+## [Unreleased]
+
+Phase 4 (matchups), stopped at its go/no-go test. See `docs/phase4-plan.md`.
+
+### Added
+- Dropbacks joined with participation data: pressure, pass rushers, man/zone, coverage,
+  box (`nflsim.data.dropbacks`), and PFR pressures per team-game as a cross-check.
+- Pass rush and pass protection ratings as of week W-1, as deviations from the same
+  season's league average (`nflsim.model.matchups`; config `[matchups]`).
+- `nflsim matchup-eval`: data coverage, rating skill, and the step 3 gate.
+
+### Fixed (data)
+- The raw pressure flag changes in 2023 (sacks unflagged before, always flagged after);
+  every sack now counts as pressure, and scrambles are left out of cross-season ratings.
+
+### Results
+- **The pass-rush matchup does not help.** Adding an offense x defense matchup term to
+  pressure prediction changes 2023-2025 log loss by 0.00000 (95% CI [-0.00003,
+  +0.00004]), and modeling pass EPA through pressure is worse than a plain EPA rating
+  (+0.0011 MSE). Same result within a single season era. Per the plan's stopping rule,
+  no matchup feature was added to the game model and the other matchups were not built.
+
 ## [0.3.0] - 2026-11-17
 
 Phase 3: injuries for both rosters, sampled per simulation run.

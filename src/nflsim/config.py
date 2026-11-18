@@ -229,8 +229,8 @@ class SimConfig(BaseModel):
     report_min_share: float = Field(default=0.05, ge=0, le=1)
 
 
-MatchupMetric = Literal["pressure", "epa_pressured", "epa_clean"]
-MATCHUP_METRICS: tuple[MatchupMetric, ...] = ("pressure", "epa_pressured", "epa_clean")
+MatchupMetric = Literal["pressure", "epa_pressured", "epa_clean", "epa"]
+MATCHUP_METRICS: tuple[MatchupMetric, ...] = ("pressure", "epa_pressured", "epa_clean", "epa")
 
 
 class MatchupsConfig(BaseModel):
@@ -242,12 +242,13 @@ class MatchupsConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    # Prior strength in dropbacks (pressure: all dropbacks; epa_pressured: pressured
-    # dropbacks; epa_clean: clean dropbacks).
+    # Prior strength in dropbacks (pressure and epa: all dropbacks; epa_pressured:
+    # pressured dropbacks; epa_clean: clean dropbacks).
     prior_dropbacks: dict[MatchupMetric, float] = {
         "pressure": 400.0,
         "epa_pressured": 400.0,
         "epa_clean": 800.0,
+        "epa": 400.0,
     }
     carryover: float = Field(default=0.5, ge=0, le=1)
 

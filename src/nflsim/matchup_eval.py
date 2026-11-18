@@ -2,9 +2,18 @@
 
 from __future__ import annotations
 
+import numpy as np
 import polars as pl
 
-from nflsim.model.matchups import METRIC_TOTALS
+from nflsim.model.matchups import (
+    LOG5,
+    METRIC_TOTALS,
+    FloatArray,
+    PressureModel,
+    expected_pass_epa,
+    fit_pressure_model,
+    pressure_terms,
+)
 
 
 def coverage(dropbacks: pl.DataFrame, pfr: pl.DataFrame | None) -> pl.DataFrame:
@@ -107,4 +116,129 @@ def rating_skill(stats: pl.DataFrame, ratings: pl.DataFrame, seasons: list[int])
                     "skill": 1 - mse / mse0 if mse is not None and mse0 else None,
                 }
             )
+    return pl.DataFrame(rows)
+
+
+def _game_bootstrap(
+    games: pl.Series, diff: FloatArray, weight: FloatArray, n_boot: int, seed: int
+) -> tuple[float, float, float]:
+    """Weighted mean of ``diff`` and a 95% interval from resampling whole games."""
+    frame = pl.DataFrame({"g": games, "d": diff * weight, "w": weight})
+    # Sorted so the same seed resamples the same games (group_by order is arbitrary).
+    per_game = frame.group_by("g").agg(pl.col("d").sum(), pl.col("w").sum()).sort("g")
+    d = np.asarray(per_game["d"].to_numpy(), dtype=np.float64)
+    w = np.asarray(per_game["w"].to_numpy(), dtype=np.float64)
+    rng = np.random.default_rng(seed)
+    idx = rng.integers(0, d.size, (n_boot, d.size))
+    boots = d[idx].sum(axis=1) / w[idx].sum(axis=1)
+    lo, hi = np.quantile(boots, [0.025, 0.975])
+    return float(np.sum(d)) / float(np.sum(w)), float(lo), float(hi)
+
+
+def pressure_gate(
+    frame: pl.DataFrame,
+    fit_seasons: list[int],
+    test_seasons: list[int],
+    n_boot: int,
+    seed: int,
+) -> tuple[pl.DataFrame, dict[str, PressureModel]]:
+    """Step 3 of the Phase 4 plan, part 1: predicting pressure on each dropback.
+
+    ``frame`` comes from ``dropback_matchups``. Models (fit on ``fit_seasons``, scored on
+    ``test_seasons``): ``league`` (league rate only), ``log5`` (offense and defense
+    combined on the logit scale, nothing fit), ``additive`` (log5 with fitted weights) and
+    ``matchup`` (plus a fitted offense x defense interaction). Returns per model its
+    coefficients, test log loss, and the difference from ``additive`` with a 95%
+    interval from resampling games; and the fitted models.
+    """
+    terms = pressure_terms(frame)
+    fit = terms.filter(pl.col("season").is_in(fit_seasons))
+    test = terms.filter(pl.col("season").is_in(test_seasons))
+    models = {
+        "league": PressureModel(w_off=0.0, w_def=0.0),
+        "log5": LOG5,
+        "additive": fit_pressure_model(fit, matchup=False),
+        "matchup": fit_pressure_model(fit, matchup=True),
+    }
+    y = test["pressure"].cast(pl.Float64).to_numpy()
+    weight = np.ones_like(y)
+    losses = {}
+    for name, model in models.items():
+        p = model.probability(test)
+        losses[name] = -(y * np.log(p) + (1 - y) * np.log(1 - p))
+    rows = []
+    for name, model in models.items():
+        diff, lo, hi = _game_bootstrap(
+            test["game_id"], losses[name] - losses["additive"], weight, n_boot, seed
+        )
+        rows.append(
+            {
+                "model": name,
+                "intercept": model.intercept,
+                "w_off": model.w_off,
+                "w_def": model.w_def,
+                "w_matchup": model.w_matchup,
+                "log_loss": float(losses[name].mean()),
+                "vs_additive": diff,
+                "ci_lo": lo,
+                "ci_hi": hi,
+            }
+        )
+    return pl.DataFrame(rows), models
+
+
+def pass_epa_gate(
+    frame: pl.DataFrame,
+    models: dict[str, PressureModel],
+    test_seasons: list[int],
+    n_boot: int,
+    seed: int,
+) -> pl.DataFrame:
+    """Step 3, part 2: predicting each team-game's EPA per dropback.
+
+    Predictions for the offense in each test game: ``league`` (league EPA per dropback),
+    ``additive`` (league + offense + defense EPA per dropback) and ``mixture/<model>``
+    (pressure chance from that model times EPA when pressured, plus the rest times EPA
+    when clean; ``expected_pass_epa``). Squared error is weighted by dropbacks; the
+    difference from ``additive`` has a 95% interval from resampling games.
+    """
+    test = pressure_terms(frame.filter(pl.col("season").is_in(test_seasons)))
+    predictions: dict[str, pl.Expr] = {
+        "league": pl.col("league_epa").first(),
+        "additive": pl.col("additive").first(),
+    }
+    columns: dict[str, pl.Series] = {}
+    for name in ("log5", "additive", "matchup"):
+        mixed = expected_pass_epa(test, models[name].probability(test))
+        columns[f"mixture/{name}"] = mixed["mixture"]
+    with_preds = expected_pass_epa(test, LOG5.probability(test)).with_columns(
+        pl.Series(k, v) for k, v in columns.items()
+    )
+    for key in columns:
+        predictions[key] = pl.col(key).first()
+    games = (
+        with_preds.group_by("game_id", "offense")
+        .agg(
+            pl.col("epa").mean().alias("actual"),
+            pl.len().cast(pl.Float64).alias("w"),
+            *[expr.alias(name) for name, expr in predictions.items()],
+        )
+        .sort("game_id", "offense")  # fixed order, so results repeat exactly
+    )
+    w = games["w"].to_numpy()
+    actual = games["actual"].to_numpy()
+    errors = {name: (games[name].to_numpy() - actual) ** 2 for name in predictions}
+    rows = []
+    for name, err in errors.items():
+        diff, lo, hi = _game_bootstrap(games["game_id"], err - errors["additive"], w, n_boot, seed)
+        rows.append(
+            {
+                "prediction": name,
+                "team_games": games.height,
+                "mse": float((err * w).sum() / w.sum()),
+                "vs_additive": diff,
+                "ci_lo": lo,
+                "ci_hi": hi,
+            }
+        )
     return pl.DataFrame(rows)

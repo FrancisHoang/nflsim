@@ -127,7 +127,7 @@ questionable_position_adjustment = { QB = -0.15 }
 #   epa_pressured  0.014 / 0.008 and 0.002 / -0.006
 #   epa_clean      0.029 / 0.041 and 0.007 / 0.008
 # Separate offense/defense strengths were mixed on the holdout, so they are shared.
-prior_dropbacks = { pressure = 400.0, epa_pressured = 400.0, epa_clean = 800.0 }
+prior_dropbacks = { pressure = 400.0, epa_pressured = 400.0, epa_clean = 800.0, epa = 400.0 }
 carryover = 0.5
 
 [sim]
