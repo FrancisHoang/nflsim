@@ -1248,5 +1248,20 @@ def dashboard(
     env = dict(os.environ)
     if config is not None:
         env["NFLSIM_CONFIG"] = str(config.resolve())
-    cmd = [sys.executable, "-m", "streamlit", "run", str(app_path), "--server.port", str(port)]
+    # Headless: Streamlit's first run otherwise asks for an email on the terminal (and
+    # exits when nobody answers). No usage statistics are sent.
+    cmd = [
+        sys.executable,
+        "-m",
+        "streamlit",
+        "run",
+        str(app_path),
+        "--server.headless",
+        "true",
+        "--browser.gatherUsageStats",
+        "false",
+        "--server.port",
+        str(port),
+    ]
+    typer.echo(f"nflsim dashboard: open http://localhost:{port} (Ctrl+C to stop)")
     raise typer.Exit(subprocess.call(cmd, env=env))
