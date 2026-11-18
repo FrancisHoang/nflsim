@@ -109,7 +109,8 @@ wind met the adoption rule (total MAE better in 3 of 4 seasons) and is now a def
 | Drive-by-drive engine (Phase 5) | 0.2251 | 0.6432 | 10.16 (CRPS margin 7.42 vs. 7.40) |
 | + indoor, wind (Phase 6) | 0.2254 | 0.6438 | 10.17 (total MAE 10.69 -> **10.61**) |
 | Opponent-adjusted ratings, coefficient ridge, recalibration | 0.2250-0.2256 | | 10.17-10.18 |
-| **+ market strength (default since 2026-11-18)** | **0.2224** | **0.6374** | **10.11** (total MAE 10.56) |
+| + market strength (default since 2026-11-18) | 0.2224 | 0.6374 | 10.11 (total MAE 10.56) |
+| **+ quarterback change (default since 2026-11-18)** | **0.2195** | **0.6307** | **10.06** (total MAE **10.44**) |
 
 **Market strength** (`mkt`, `opp_mkt`) is each team's strength implied by the closing
 spreads of *earlier* weeks, shrunk toward last season. It is the first change that
@@ -119,6 +120,13 @@ under-confidence (actual vs. predicted margin slope 1.20 -> 0.92). It uses no fu
 information, but it does make the market an input, so the backtest also reports
 `pbp_only`, the same model without it, to keep an independent measure of the
 play-by-play ratings. Details: [docs/underconfidence.md](docs/underconfidence.md).
+
+**Quarterback change** (`qb_change`) is this week's starting QB's rating minus the rating of
+the QBs the team's ratings were built on. Most of the remaining gap to Vegas was late-season
+games with a backup or new quarterback; this closes part of it: Brier -0.0029 (95% CI
+[-0.0052, -0.0004]), significant on 2017-2024 too. The starter is the one nflverse lists
+(for past games the actual starter, so the backtest is slightly optimistic); `simulate`
+prints it and `--out` replaces him with his backup. Details: [docs/qb-change.md](docs/qb-change.md).
 
 ## Configuration
 

@@ -119,3 +119,44 @@ def test_apply_overrides_changes_lineup_and_game_features() -> None:
     assert rows["Big Tackle"]["before"] is None  # no projected role: no effect
     with pytest.raises(ValueError, match="exactly one row"):
         apply_overrides(games, "NOPE", lineup, resolved, InjuriesConfig())
+
+
+def test_ruling_out_the_listed_starter_switches_qb_change_to_the_projection() -> None:
+    from nflsim.overrides import ResolvedOverride
+
+    games = pl.DataFrame(
+        {
+            "game_id": ["SIM"],
+            "season": [2024],
+            "week": [5],
+            "home_team": ["KC"],
+            "away_team": ["BUF"],
+            "h_off_qb": [0.10],
+            "a_off_qb": [0.10],
+            "h_qb_change": [0.0],  # the listed starter is the usual QB
+            "a_qb_change": [0.05],
+            "h_qb_change_proj": [0.02],
+            "a_qb_change_proj": [0.03],
+            "h_qb_starter_id": ["qb1"],
+            "a_qb_starter_id": [None],
+            "h_qb_starter_listed": [True],
+            "a_qb_starter_listed": [False],
+        },
+        schema_overrides={"a_qb_starter_id": pl.String},
+    )
+    lineup = LINEUP.with_columns(practice=pl.lit("none"))
+
+    def run(overrides: list[ResolvedOverride]) -> dict[str, object]:
+        out, _, _ = apply_overrides(games, "SIM", lineup, overrides, InjuriesConfig())
+        return out.row(0, named=True)
+
+    starter_out = run([ResolvedOverride("out", "qb1", "qb1", "Qb One", "KC", "QB")])
+    assert isinstance(starter_out["h_off_qb"], float)
+    moved = starter_out["h_off_qb"] - 0.10
+    assert starter_out["h_qb_change_proj"] == pytest.approx(0.02 + moved)
+    assert starter_out["h_qb_change"] == starter_out["h_qb_change_proj"]  # backup now
+    # No listed starter (BUF): qb_change follows the projection after any override.
+    assert starter_out["a_qb_change"] == pytest.approx(starter_out["a_qb_change_proj"])
+
+    other_qb = run([ResolvedOverride("plays", "qb1", "qb1", "Qb One", "KC", "QB")])
+    assert other_qb["h_qb_change"] == 0.0  # the listed starter still starts

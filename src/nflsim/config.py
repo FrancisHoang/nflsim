@@ -106,6 +106,7 @@ class ModelConfig(BaseModel):
         "wind",
         "mkt",
         "opp_mkt",
+        "qb_change",
     )
     train_seasons: int = Field(default=5, ge=1)
     min_expected_points: float = Field(default=3.0, gt=0)

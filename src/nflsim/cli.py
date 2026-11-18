@@ -327,6 +327,7 @@ def simulate(
     cache = DataCache(settings.data, offline=offline)
     effects = None
     base = None
+    ruled_out: set[str] = set()
     try:
         schedules = cache.load("schedules", [season])
         matchup = find_matchup(schedules, season, week, home, away, neutral)
@@ -336,6 +337,7 @@ def simulate(
             rosters = roster_weeks(cache.load("rosters_weekly", [season]), cache.load("players"))
             roster = week_roster(rosters, season, week, (info["home_team"], info["away_team"]))
             resolved = resolve(requested, roster)
+            ruled_out = {x.gsis_id for x in resolved if x.kind in ("out", "doubtful")}
             if compare:
                 base = predict_matchup(games, settings, n, seed, lineup)
             games, lineup, effects = apply_overrides(
@@ -362,6 +364,8 @@ def simulate(
         stat_frame = _stat_line_frame(cache, settings, lineup, r)
     market = bool(set(settings.model.features) & set(MARKET_FEATURES))
     used = _used(cache, schedules, matchup, r, lineup is not None, market)
+    if "qb_change" in settings.model.features:
+        used = replace(used, starters=_listed_starters(cache, games, r, ruled_out))
 
     if json_output:
         payload = {
@@ -608,6 +612,8 @@ class _Used:
     injury_aware: bool
     final: tuple[int, int] | None
     market: bool = False  # market strength (earlier weeks' closing spreads) used
+    # Quarterback change: team -> listed starter's name (None: not listed, projection used).
+    starters: dict[str, str | None] | None = None
     report_error: str | None = None
     report_counts: dict[str, int] | None = None
     listed: pl.DataFrame | None = None
@@ -648,11 +654,30 @@ def _used_dict(u: _Used) -> dict[str, object]:
         "pbp_cached_at": u.pbp_cached.isoformat(timespec="minutes") if u.pbp_cached else None,
         "offline": u.offline,
         "injury_aware": u.injury_aware,
+        "listed_starting_qbs": u.starters,
         "market_strength": u.market,
         "injury_report_error": u.report_error,
         "injury_report_players": u.report_counts,
         "injury_report": records(u.listed),
     }
+
+
+def _listed_starters(
+    cache: DataCache, games: pl.DataFrame, r: MatchupResult, ruled_out: set[str]
+) -> dict[str, str | None]:
+    """Each team's listed starting QB in the matchup row (None when not listed); one in
+    ``ruled_out`` (overridden out or doubtful) is marked as replaced by the projection."""
+    info = games.filter(pl.col("game_id") == MATCHUP_ID).row(0, named=True)
+    names = dict(cache.load("players").select("gsis_id", "display_name").iter_rows())
+    out: dict[str, str | None] = {}
+    for team, side in ((r.home, "h_"), (r.away, "a_")):
+        gsis = info.get(f"{side}qb_starter_id")
+        if not gsis:
+            out[team] = None
+            continue
+        name = names.get(gsis) or gsis
+        out[team] = f"{name} (overridden; his backup is used)" if gsis in ruled_out else name
+    return out
 
 
 def _print_used(u: _Used, r: MatchupResult) -> None:
@@ -678,6 +703,15 @@ def _print_used(u: _Used, r: MatchupResult) -> None:
             f"  market strength: closing spreads of {r.season} games before week {r.week} "
             "(never this game's line). It lags a week: a player back from injury is still "
             "priced as out."
+        )
+    if u.starters is not None:
+        names = ", ".join(
+            f"{team} {name}" if name else f"{team} none listed (projection used)"
+            for team, name in u.starters.items()
+        )
+        typer.echo(
+            f"  starting QBs (nflverse listing): {names}. A different starter? Use --out "
+            "for the listed one."
         )
     if u.report_error is not None or u.report_counts is None:
         typer.echo(f"  injury report: unavailable ({u.report_error})")

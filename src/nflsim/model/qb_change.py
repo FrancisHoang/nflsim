@@ -128,7 +128,8 @@ def qb_change_features(
     off_qb: pl.DataFrame,
     config: PlayerRatingsConfig,
 ) -> pl.DataFrame:
-    """``season, week, team, qb_change, qb_change_proj, qb_starter_listed, qb_base_source``.
+    """``season, week, team, qb_change, qb_change_proj, qb_starter_listed, qb_starter_id,
+    qb_base_source`` (``qb_starter_id``: the listed starter's GSIS ID, null when none).
 
     ``off_qb`` is a team-week frame with the projected QB value ``off_qb`` (from
     ``team_player_features`` or the injury-aware features).
@@ -140,7 +141,11 @@ def qb_change_features(
     proj = off_qb.select(*_KEYS, "off_qb").cast({"season": pl.Int32, "week": pl.Int32})
     frame = (
         base.join(proj, on=_KEYS, how="left")
-        .join(starters.select(*_KEYS, "starter_dev"), on=_KEYS, how="left")
+        .join(
+            starters.select(*_KEYS, "starter_dev", pl.col("gsis_id").alias("qb_starter_id")),
+            on=_KEYS,
+            how="left",
+        )
         .with_columns(
             qb_change_proj=pl.col("off_qb").fill_null(0.0) - pl.col("qb_base"),
             qb_starter_listed=pl.col("starter_dev").is_not_null(),
@@ -152,7 +157,12 @@ def qb_change_features(
         )
     )
     return frame.select(
-        *_KEYS, "qb_change", "qb_change_proj", "qb_starter_listed", "qb_base_source"
+        *_KEYS,
+        "qb_change",
+        "qb_change_proj",
+        "qb_starter_listed",
+        "qb_starter_id",
+        "qb_base_source",
     )
 
 
