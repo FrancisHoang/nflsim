@@ -1,0 +1,123 @@
+# Phase 4 plan: matchups
+
+Status: **proposed** (2026-11-17). Nothing here is built yet.
+
+## Goal
+
+Model how a specific offense fares against a specific defense, beyond the sum of the two
+team ratings. The Phase 1 points model is additive: a team's expected points are its
+offense rating plus the opponent's defense rating. A matchup effect is an **interaction**,
+e.g. a weak pass-protecting offense facing a strong pass rush loses more than either
+rating alone predicts.
+
+## Where we start
+
+- The Phase 1 baseline is the benchmark: Brier 0.2254, margin MAE 10.17 (2021-2024,
+  1,139 games). Vegas closing lines: 0.2112 and 9.79.
+- Neither Phase 2 (player ratings) nor Phase 3 (injuries) significantly improved it.
+- The model is under-confident (actual-vs-predicted margin slope 1.20). The direct margin
+  fit showed that the per-team points model misses effects between the two sides, which
+  is what matchup terms are meant to capture.
+- Prior expectation: matchup interactions in the NFL are usually small next to team
+  strength, and the market already prices the obvious ones. This phase is a test of
+  whether they add anything, not a promise that they will.
+
+## Approach
+
+Start with the matchup that has the clearest mechanism and the most data, prove or
+disprove it at the play level, and only then move to the game model and other matchups.
+
+**Stopping rule:** if the pass-rush interaction does not beat the additive model out of
+sample at the play level (step 3), stop, report it, and do not build the other matchups
+on the same idea.
+
+### Step 1: data layer (`nflsim.data.participation`)
+
+- Per-dropback frame joining `pbp` (dropbacks, EPA, sacks, QB hits) with
+  `participation` (`was_pressure`, `number_of_pass_rushers`, `defense_man_zone_type`,
+  `defense_coverage_type`, `defenders_in_box`, `offense_personnel`, players on the field).
+- PFR weekly stats as a second source: `pfr_def` (pressures, hurries, blitzes per
+  defender) and `pfr_pass` (times pressured per QB), 2018 onward.
+- Coverage report: share of dropbacks with pressure, man/zone and rusher counts known,
+  by season (extend `injury-eval`-style reporting into a `matchup-eval` command).
+
+### Step 2: matchup ratings as of week W-1
+
+All shrunk toward league average (empirical Bayes, prior strengths in a new
+`[matchups]` config section), blended with last season early on, using games before
+week W only:
+
+- Offense: pressure rate allowed per dropback; QB EPA per dropback when pressured and
+  when clean.
+- Defense: pressure rate generated; EPA allowed when getting pressure and when not.
+- Rates are expressed as deviations from that season's league average, because the
+  pressure definition changes between sources (see data gaps).
+
+### Step 3: play-level test (the gate)
+
+Predict whether each dropback is pressured, out of sample (fit 2018-2022, check
+2023-2025):
+
+- Additive baseline: offense rate and defense rate combined on the logit scale
+  (`logit p = logit(off) + logit(def) - logit(league)`, the standard log5 form).
+- Matchup model: the same plus an interaction term, and QB pressure sensitivity
+  (how much the QB's EPA drops under pressure).
+
+Then predict each game's offense EPA per dropback as
+`p_pressure * EPA_pressured + (1 - p_pressure) * EPA_clean` and compare its error with
+the Phase 1 additive pass ratings on the same games.
+
+Pass/fail: lower log loss for pressure and lower squared error for game pass EPA than
+the additive model, on the 2023-2025 holdout, with a paired bootstrap interval.
+
+### Step 4: game model and backtest
+
+If step 3 passes: add `pass_matchup` (expected pass EPA from step 3 minus the additive
+expectation) as an opt-in points-model feature. Backtest 2021-2024 against the Phase 1
+baseline with both margin fits, since this is exactly the cross-side effect the direct
+fit was built for. Report Brier, log loss, margin MAE, calibration slope and the games
+where the feature moves the margin most.
+
+### Step 5: further matchups, only if step 4 helps
+
+In order of expected value:
+
+1. **Defensive injuries to pass rushers.** Phase 3 covers offensive skill players only.
+   With per-defender pressures (`pfr_def`), the availability code can remove an injured
+   edge rusher from the defense's pressure rating. The same applies to offensive linemen
+   via `participation`.
+2. **QB vs. man/zone coverage:** QB EPA against man and against zone, weighted by the
+   opponent's man/zone share.
+3. **Run game vs. run defense:** rush EPA by defenders in the box and run direction
+   (`run_gap`, `run_location`).
+4. **WR/TE vs. CB/S:** team level only (see data gaps). Offense target share by position
+   against defense EPA allowed by target position.
+
+## Data gaps and assumptions
+
+- **Pressure definition changes.** Pressure is known on ~89-91% of dropbacks in
+  2016-2022 and 100% from 2023. The pressure rate is lower in 2016-2017 (~25% vs. ~29%),
+  and from 2023 pressured dropbacks average -0.44 EPA vs. -0.03 before at a similar rate,
+  so the definition or source changed. Ratings must be normalized within each season, and
+  the 2023-2025 holdout crosses that change, which makes it a hard but honest test.
+- **PFR advanced stats start in 2018** but are consistent through 2025 (~4,700-5,400
+  defender pressures per season), so they can cross-check the participation data across
+  the 2023 change.
+- **Coverage type is missing in 2016-2017** and about half of 2023-2025 plays have
+  `defense_coverage_type` (man/zone type is complete), so coverage matchups use
+  2018 onward and man/zone only.
+- **No individual coverage assignments** in nflverse: which corner covered which
+  receiver is unknown, so WR vs. CB can only be modeled at team or position-group level.
+- **Pressure is shared between QB and line.** Holding the ball long causes pressure. The
+  offense rating mixes both; splitting them is out of scope unless step 3 shows it
+  matters (`time_to_throw` is only ~40% populated).
+- **Participation data is only available after games**, so it is used through week W-1
+  only, like everything else.
+
+## Deliverables
+
+- One PR per step, each with tests on small fixture data (no network), ruff, mypy.
+- `nflsim matchup-eval` for steps 1-3; `nflsim backtest --features ...,pass_matchup`
+  for step 4.
+- Results recorded in CLAUDE.md and CHANGELOG.md whether or not they help. If Phase 4
+  ships, it is release v0.4.0.

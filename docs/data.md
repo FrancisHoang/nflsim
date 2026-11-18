@@ -12,7 +12,7 @@ live list.
 | `injuries` | 2009 | Game status and practice participation (Phase 3) |
 | `depth_charts` | 2001 | Backups for injured players (Phase 3) |
 | `snap_counts` | 2012 | Snap-weighting player ratings (Phase 2) |
-| `participation` | 2016 | Players on the field per play (Phase 4) |
+| `participation` | 2016 | Players on the field, pressure, rushers, man/zone per play (Phase 4; see [phase4-plan.md](phase4-plan.md) for coverage by season) |
 | `ngs_passing`, `ngs_receiving`, `ngs_rushing` | 2016 | Next Gen Stats (Phase 4) |
 | `pfr_pass`, `pfr_rush`, `pfr_rec`, `pfr_def` | 2018 | PFR advanced stats: pressures, coverage (Phase 4) |
 | `players`, `teams` | n/a | ID crosswalk, team metadata |
