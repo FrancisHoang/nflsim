@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 import numpy as np
 import polars as pl
 
-from nflsim.config import PLAYER_FEATURES, Settings
+from nflsim.config import MARKET_FEATURES, PLAYER_FEATURES, Settings
 from nflsim.data import (
     DataCache,
     depth_chart_weeks,
@@ -366,6 +366,17 @@ def predict_matchup(
             )
 
     used = set(settings.model.features)
+    if used & set(MARKET_FEATURES):
+        for prefix, name in (("h_", info["home_team"]), ("a_", info["away_team"])):
+            if info.get(f"{prefix}mkt_games"):
+                continue
+            if info.get(f"{prefix}mkt_prior_games"):
+                flags.append(
+                    f"{name}: no closing lines yet this season; market strength is last "
+                    "season's, carried over"
+                )
+            else:
+                flags.append(f"{name}: no closing lines cached; market strength is league average")
     if used & {"rest", "opp_rest"} and info.get("rest_missing"):
         flags.append("rest days unknown for this game; both teams assumed on normal rest")
     if used & {"indoor", "wind"}:

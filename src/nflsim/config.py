@@ -81,7 +81,7 @@ PointsFeature = Literal[
 PLAYER_FEATURES: tuple[PointsFeature, ...] = ("off_qb", "off_rush", "off_recv")
 # Game context from the schedule (Phase 6).
 CONTEXT_FEATURES: tuple[PointsFeature, ...] = ("rest", "opp_rest", "indoor", "wind")
-# Team strength implied by earlier weeks' closing spreads (opt-in, [market]).
+# Team strength implied by earlier weeks' closing spreads ([market]; default since 2026-11-18).
 MARKET_FEATURES: tuple[PointsFeature, ...] = ("mkt", "opp_mkt")
 
 
@@ -99,6 +99,8 @@ class ModelConfig(BaseModel):
         "def_pace",
         "indoor",
         "wind",
+        "mkt",
+        "opp_mkt",
     )
     train_seasons: int = Field(default=5, ge=1)
     min_expected_points: float = Field(default=3.0, gt=0)
