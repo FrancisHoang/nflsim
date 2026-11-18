@@ -1,6 +1,6 @@
 [project]
 name = "nflsim"
-version = "0.3.0"
+version = "0.4.0"
 description = "Monte Carlo NFL game simulator that accounts for injuries and player matchups."
 readme = "README.md"
 license = "MIT"
