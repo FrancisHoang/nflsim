@@ -27,6 +27,16 @@ prior_plays_rush_epa = 400.0  # rushing EPA is noisier, so shrink harder
 prior_games_pace = 4.0
 # Share of last season's deviation from league average kept in this season's prior.
 carryover = 0.5
+# Opponent adjustment: fit offense and defense jointly, so each play's value is
+#   league average + offense deviation + opposing defense's deviation,
+# by weighted least squares with the same priors and strengths as above (a ridge). With
+# only average opponents it gives exactly the unadjusted ratings. Pace is not adjusted.
+# The previous season's deviations (the prior) come from a joint fit of that whole season
+# with ridge strength opponent_prior_ridge plays.
+# Backtest 2021-2024 (2026-11-18): Brier 0.2254 -> 0.2253 (n.s.); ratings change little
+# (correlation 0.97-0.99 with unadjusted). Off.
+opponent_adjust = false
+opponent_prior_ridge = 1.0
 
 [model]
 # Game-level points model (Phase 1). Each team's expected points are
@@ -49,6 +59,10 @@ features = ["off_epa", "def_epa", "off_success", "def_success", "off_pace", "def
 train_seasons = 5
 # Expected points are floored here so the score distribution stays valid.
 min_expected_points = 3.0
+# Ridge penalty on the feature coefficients, on standardized features (0 = plain least
+# squares). Intercept and home field are not penalized.
+# Backtest 2021-2024 (2026-11-18): 0.003-0.1 all within +/-0.0001 Brier. Off.
+ridge = 0.0
 # How the expected margin is fit:
 #   "points": home points model minus away points model (the Phase 1 baseline).
 #   "direct": a separate least-squares fit of actual margin on home-minus-away features
@@ -231,3 +245,20 @@ carryover = [0.3, 0.5, 0.7, 0.9]
 prior_games_pace = [2.0, 4.0, 8.0]
 # [min_wp, max_wp] garbage-time windows.
 wp_windows = [[0.05, 0.95], [0.0, 1.0], [0.1, 0.9]]
+
+[market]
+# Team strength implied by earlier weeks' closing spreads, for the opt-in features
+#   mkt, opp_mkt: the scoring team's and the opponent's strength (points of margin).
+# Per season and week W: ridge fit of spread_line = home + s_home - s_away over the
+# season's games before W, shrunk toward carryover x last season's strengths with
+# prior_games games of weight (last season's strengths: full-season fit, ridge
+# prior_season_ridge games). Lines are public before kickoff, so no future data is used,
+# but with these features the market is an input and Vegas is no longer an independent
+# benchmark.
+# Backtest 2021-2024 (2026-11-18), six team features + context + mkt, opp_mkt: Brier
+# 0.2254 -> 0.2224 (95% CI [-0.0062, +0.0002]), better in 3 of 4 seasons; 2017-2024
+# -0.0042 (CI [-0.0068, -0.0015]). Settings chosen before testing (not tuned).
+# docs/underconfidence.md.
+prior_games = 4.0
+carryover = 0.6
+prior_season_ridge = 0.5

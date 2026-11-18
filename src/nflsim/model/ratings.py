@@ -22,6 +22,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+import numpy as np
 import polars as pl
 
 from nflsim.config import RatingsConfig
@@ -247,9 +248,11 @@ def ratings_as_of(
         .then(pl.lit("league"))
         .otherwise(pl.lit("none"))
     )
+    rated = frame.with_columns(*exprs, *league_exprs)
+    if config.opponent_adjust:
+        rated = _with_opponent_adjustment(rated, team_games, targets, config)
     return (
-        frame.with_columns(*exprs, *league_exprs)
-        .with_columns(
+        rated.with_columns(
             pl.col("games").cast(pl.Int64).alias("games_played"),
             prior_source.alias("prior_source"),
         )
@@ -294,3 +297,159 @@ def _shrunk(
     deviation = (prev_team - prev_league).fill_null(0.0)
     prior = league + carryover * deviation
     return (cur_total + strength * prior) / (cur_count + strength)
+
+
+# Opponent adjustment (``RatingsConfig.opponent_adjust``) ---------------------------------
+
+ADJUSTED_COLUMNS = [f"{u}_{m.name}" for u in ("off", "def") for m in _METRICS]
+
+
+def _with_opponent_adjustment(
+    rated: pl.DataFrame, team_games: pl.DataFrame, targets: pl.DataFrame, config: RatingsConfig
+) -> pl.DataFrame:
+    """Replace the per-play ratings with ``opponent_adjusted`` ones (nulls stay null)."""
+    adj = opponent_adjusted(team_games, targets, config).rename(
+        {c: f"_adj_{c}" for c in ADJUSTED_COLUMNS}
+    )
+    return (
+        rated.cast({"season": pl.Int32, "week": pl.Int32})
+        .join(adj, on=["season", "week", "team"], how="left")
+        .with_columns(
+            pl.when(pl.col(c).is_not_null()).then(pl.col(f"_adj_{c}")).alias(c)
+            for c in ADJUSTED_COLUMNS
+        )
+        .drop([f"_adj_{c}" for c in ADJUSTED_COLUMNS])
+    )
+
+
+def opponent_adjusted(
+    team_games: pl.DataFrame, targets: pl.DataFrame, config: RatingsConfig
+) -> pl.DataFrame:
+    """Opponent-adjusted offense and defense ratings for each (season, week, team).
+
+    For each metric, a weighted ridge regression over the season's games before week W:
+    each team-game's per-play value is ``league + o[offense] + d[defense]`` (weight =
+    plays), with ``o`` and ``d`` shrunk toward ``carryover`` x the previous season's
+    adjusted deviations, at the metric's prior strength ``k``. Ratings are ``league + o``
+    and ``league + d`` (``league`` pools last season with this season so far, like the
+    unadjusted ratings). If every opponent were average (all ``d = 0``), the offense
+    rating would be exactly the unadjusted ``(sum + k * prior) / (plays + k)``.
+
+    Returns ``season, week, team`` plus ``ADJUSTED_COLUMNS``; null without league data.
+    """
+    rows = _opponent_rows(team_games)
+    targets = targets.select("season", "week", "team").unique()
+    frames: list[pl.DataFrame] = []
+    for season in sorted(targets["season"].unique().to_list()):
+        season_targets = targets.filter(pl.col("season") == season)
+        cur = rows.filter(pl.col("season") == season)
+        prev = rows.filter(pl.col("season") == season - 1)
+        teams = sorted(
+            set(cur["team"].to_list())
+            | set(prev["team"].to_list())
+            | set(season_targets["team"].to_list())
+        )
+        index = {t: i for i, t in enumerate(teams)}
+        weeks = sorted(season_targets["week"].unique().to_list())
+        columns: dict[str, list[float | None]] = {}
+        for m in _METRICS:
+            k = float(getattr(config, m.strength))
+            prev_o, prev_d = _season_deviations(prev, m, index, config.opponent_prior_ridge)
+            off: list[float | None] = []
+            dfn: list[float | None] = []
+            for week in weeks:
+                before = cur.filter(pl.col("week") < week)
+                league = _pooled_league(before, prev, m)
+                if league is None:
+                    off.extend([None] * len(teams))
+                    dfn.extend([None] * len(teams))
+                    continue
+                o, d = _joint_fit(
+                    before,
+                    m,
+                    index,
+                    league,
+                    k,
+                    config.carryover * prev_o,
+                    config.carryover * prev_d,
+                )
+                off.extend((league + o).tolist())
+                dfn.extend((league + d).tolist())
+            columns[f"off_{m.name}"] = off
+            columns[f"def_{m.name}"] = dfn
+        frame = pl.DataFrame(
+            {
+                "season": [season] * (len(weeks) * len(teams)),
+                "week": [w for w in weeks for _ in teams],
+                "team": teams * len(weeks),
+                **columns,
+            },
+            schema_overrides={"season": pl.Int32, "week": pl.Int32},
+        )
+        frames.append(
+            season_targets.cast({"season": pl.Int32, "week": pl.Int32}).join(
+                frame, on=["season", "week", "team"], how="left"
+            )
+        )
+    return pl.concat(frames, how="vertical")
+
+
+def _opponent_rows(team_games: pl.DataFrame) -> pl.DataFrame:
+    """Team-game offense sums with the opposing team (the defense on those plays)."""
+    sums = [f"off_{c}" for c in _UNIT_SUMS]
+    own = team_games.select("season", "week", "game_id", "team", *sums)
+    opponents = team_games.select("game_id", pl.col("team").alias("opp"))
+    return (
+        own.join(opponents, on="game_id", how="inner")
+        .filter(pl.col("team") != pl.col("opp"))
+        .cast({"season": pl.Int32, "week": pl.Int32})
+    )
+
+
+def _pooled_league(cur: pl.DataFrame, prev: pl.DataFrame, m: _Metric) -> float | None:
+    """League per-play value of last season plus this season so far (``_league_rate``)."""
+    total = float(cur[f"off_{m.total}"].sum()) + float(prev[f"off_{m.total}"].sum())
+    count = float(cur[f"off_{m.count}"].sum()) + float(prev[f"off_{m.count}"].sum())
+    return total / count if count > 0 else None
+
+
+def _season_deviations(
+    rows: pl.DataFrame, m: _Metric, index: dict[str, int], ridge: float
+) -> tuple[np.ndarray, np.ndarray]:
+    """Adjusted offense/defense deviations over a whole season (zeros without data)."""
+    zeros = np.zeros(len(index))
+    count = float(rows[f"off_{m.count}"].sum()) if rows.height else 0.0
+    if count <= 0:
+        return zeros, zeros.copy()
+    league = float(rows[f"off_{m.total}"].sum()) / count
+    return _joint_fit(rows, m, index, league, ridge, zeros, zeros.copy())
+
+
+def _joint_fit(
+    rows: pl.DataFrame,
+    m: _Metric,
+    index: dict[str, int],
+    league: float,
+    strength: float,
+    prior_o: np.ndarray,
+    prior_d: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Minimize ``sum n (rate - league - o_t - d_u)^2 + k |o - prior_o|^2 + k |d - prior_d|^2``.
+
+    ``rows`` are team-games (offense ``team``, defense ``opp``); unknowns are offense
+    deviations for every team, then defense deviations. Solved by the normal equations.
+    """
+    size = len(index)
+    a = np.diag(np.full(2 * size, strength))
+    b = np.concatenate([strength * prior_o, strength * prior_d])
+    if rows.height:
+        t = np.array([index[x] for x in rows["team"].to_list()], dtype=np.int64)
+        u = np.array([index[x] for x in rows["opp"].to_list()], dtype=np.int64) + size
+        n = rows[f"off_{m.count}"].to_numpy().astype(np.float64)
+        excess = rows[f"off_{m.total}"].to_numpy().astype(np.float64) - n * league
+        for i, j in ((t, t), (u, u), (t, u), (u, t)):
+            np.add.at(a, (i, j), n)
+        np.add.at(b, t, excess)
+        np.add.at(b, u, excess)
+    x = np.linalg.solve(a, b)
+    return x[:size], x[size:]

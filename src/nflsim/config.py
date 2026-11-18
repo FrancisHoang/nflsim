@@ -37,6 +37,11 @@ class RatingsConfig(BaseModel):
     prior_games_pace: float = Field(default=4.0, gt=0)
     # Share of last season's deviation from league average carried into this season's prior.
     carryover: float = Field(default=0.5, ge=0, le=1)
+    # Opponent adjustment: rate offense and defense jointly, so each play's value is
+    # league average + offense + opposing defense (ridge toward the same priors).
+    opponent_adjust: bool = False
+    # Ridge strength, in plays, for the previous season's adjusted deviations (the prior).
+    opponent_prior_ridge: float = Field(default=1.0, gt=0)
 
     @model_validator(mode="after")
     def _wp_window(self) -> Self:
@@ -69,11 +74,15 @@ PointsFeature = Literal[
     "opp_rest",
     "indoor",
     "wind",
+    "mkt",
+    "opp_mkt",
 ]
 # Features built from player ratings (Phase 2) rather than team ratings.
 PLAYER_FEATURES: tuple[PointsFeature, ...] = ("off_qb", "off_rush", "off_recv")
 # Game context from the schedule (Phase 6).
 CONTEXT_FEATURES: tuple[PointsFeature, ...] = ("rest", "opp_rest", "indoor", "wind")
+# Team strength implied by earlier weeks' closing spreads (opt-in, [market]).
+MARKET_FEATURES: tuple[PointsFeature, ...] = ("mkt", "opp_mkt")
 
 
 class ModelConfig(BaseModel):
@@ -97,6 +106,9 @@ class ModelConfig(BaseModel):
     # "direct": margin fit by its own regression on home-minus-away features; the total
     # still comes from the points model.
     margin_fit: Literal["points", "direct"] = "points"
+    # Ridge penalty on the feature coefficients (standardized; 0 = least squares). The
+    # intercept and home field are not penalized.
+    ridge: float = Field(default=0.0, ge=0)
     # Home field (Phase 6). Default: one constant fit on all training seasons. Otherwise
     # each season gets its own home value and they are averaged with these weights:
     # excluded seasons count 0 (e.g. 2020, mostly played without fans), and a half-life
@@ -410,6 +422,23 @@ class TuningConfig(BaseModel):
         return self
 
 
+class MarketConfig(BaseModel):
+    """Team strength implied by closing spreads of earlier weeks (opt-in ``mkt`` features).
+
+    Per season and week W, a ridge fit of ``spread_line = home + s_home - s_away`` over
+    the season's games before W, shrunk toward ``carryover`` x last season's strengths
+    with ``prior_games`` games of weight. Lines are public before kickoff, so this uses
+    no future information, but it makes the market an input, not only a benchmark.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    prior_games: float = Field(default=4.0, gt=0)
+    carryover: float = Field(default=0.6, ge=0, le=1)
+    # Ridge strength (games) for last season's full-season strengths (the prior).
+    prior_season_ridge: float = Field(default=0.5, gt=0)
+
+
 class Settings(BaseModel):
     """Top-level nflsim settings. New phases add new sections here."""
 
@@ -422,6 +451,7 @@ class Settings(BaseModel):
     injuries: InjuriesConfig = InjuriesConfig()
     matchups: MatchupsConfig = MatchupsConfig()
     context: ContextConfig = ContextConfig()
+    market: MarketConfig = MarketConfig()
     drives: DrivesConfig = DrivesConfig()
     stat_lines: StatLinesConfig = StatLinesConfig()
     sim: SimConfig = SimConfig()
