@@ -21,12 +21,24 @@ TODAY = dt.date(2024, 11, 10)
 
 @pytest.fixture(autouse=True)
 def no_network(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Fail any test that tries to open a network connection."""
+    """Fail any test that tries to open a network connection.
+
+    Loopback is allowed: on Windows, asyncio's event loop (used by Streamlit's AppTest)
+    builds its internal socket pair by connecting to 127.0.0.1.
+    """
 
     def guard(*args: Any, **kwargs: Any) -> None:
         raise RuntimeError("network access is not allowed in tests")
 
-    monkeypatch.setattr(socket.socket, "connect", guard)
+    connect = socket.socket.connect
+
+    def loopback_only(self: socket.socket, address: Any) -> None:
+        host = address[0] if isinstance(address, tuple) else address
+        if host not in ("127.0.0.1", "::1", "localhost"):
+            guard()
+        connect(self, address)
+
+    monkeypatch.setattr(socket.socket, "connect", loopback_only)
     monkeypatch.setattr(socket, "create_connection", guard)
 
 

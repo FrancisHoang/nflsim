@@ -233,3 +233,25 @@ def test_matchup_eval_reports_pressure_coverage(
     seasons = {row[0]: row for row in lines if row and row[0] in ("2017", "2018")}
     assert seasons["2017"][-2:] == ["None", "None"]  # no PFR data before 2018
     assert seasons["2018"][-2] == "0.500"  # 2 participation pressures per 4 PFR pressures
+
+
+def test_dashboard_command_runs_streamlit_with_the_config(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    pytest.importorskip("streamlit")
+    seen: dict[str, object] = {}
+
+    def call(cmd: list[str], env: dict[str, str]) -> int:
+        seen["cmd"], seen["env"] = cmd, env
+        return 0
+
+    monkeypatch.setattr("subprocess.call", call)
+    cfg = tmp_path / "cfg.toml"
+    cfg.write_text("")
+    result = runner.invoke(cli.app, ["dashboard", "--port", "8555", "--config", str(cfg)])
+    assert result.exit_code == 0, result.output
+    cmd = seen["cmd"]
+    assert isinstance(cmd, list) and cmd[1:4] == ["-m", "streamlit", "run"]
+    assert cmd[4].endswith("app.py") and cmd[-2:] == ["--server.port", "8555"]
+    env = seen["env"]
+    assert isinstance(env, dict) and env["NFLSIM_CONFIG"] == str(cfg.resolve())

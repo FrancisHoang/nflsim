@@ -21,7 +21,6 @@ from nflsim.data import (
     dropbacks,
     id_coverage,
     injury_reports,
-    normalize_teams,
     parse_seasons,
     pfr_team_pressure,
     player_snaps,
@@ -53,7 +52,6 @@ from nflsim.pipeline import (
     load_games_with_lineups,
     load_lineups,
     predict_matchup,
-    predict_week,
 )
 from nflsim.player_eval import evaluate_injury_usage, evaluate_ratings, evaluate_usage
 from nflsim.stat_eval import baseline_per_game, evaluate_stat_lines
@@ -64,9 +62,9 @@ from nflsim.summary import (
     line_dict,
     quantile_dict,
     records,
-    week_frame,
 )
 from nflsim.tuning import current_params, evaluate, evaluate_holdout, grid
+from nflsim.weekly import injury_settings, run_week
 
 app = typer.Typer(help="Monte Carlo NFL game simulator.", no_args_is_help=True)
 
@@ -323,7 +321,7 @@ def simulate(
         )
     if requested or players:
         injuries = True  # both act through the injury-aware lineup
-    settings = _injury_settings(settings, injuries)
+    settings = injury_settings(settings, injuries)
     cache = DataCache(settings.data, offline=offline)
     effects = None
     base = None
@@ -743,17 +741,6 @@ def _print_used(u: _Used, r: MatchupResult) -> None:
         )
 
 
-def _injury_settings(settings: Settings, injuries: bool | None) -> Settings:
-    """``settings`` with injury-aware player features switched on or off (None: as is)."""
-    if injuries is None:
-        return settings
-    features = settings.model.features
-    if injuries:
-        features = (*features, *[f for f in PLAYER_FEATURES if f not in features])
-    model_cfg = settings.model.model_copy(update={"injury_aware": injuries, "features": features})
-    return settings.model_copy(update={"model": model_cfg})
-
-
 @app.command()
 def week(
     season: Annotated[int, typer.Option(help="Season.")],
@@ -781,28 +768,15 @@ def week(
     Each game is simulated exactly as `simulate` would (same seed), with lines from the
     nflverse schedule. For overrides or player stat lines, run `simulate` on the game.
     """
-    settings = _injury_settings(load_settings(config), injuries)
+    settings = injury_settings(load_settings(config), injuries)
     cache = DataCache(settings.data, offline=offline)
     try:
-        schedules = cache.load("schedules", [season])
-        games, lineup = load_games_with_lineups(cache, settings, season)
-        preds = predict_week(games, settings, season, week, n, seed, lineup)
+        run = run_week(cache, settings, season, week, n, seed)
     except (ValueError, FileNotFoundError) as err:
         raise typer.BadParameter(str(err)) from err
-    schedule = normalize_teams(
-        schedules.filter((pl.col("season") == season) & (pl.col("week") == week)),
-        ["home_team", "away_team"],
-    )
-    frame = week_frame(preds, schedule)
-    flags: dict[str, list[str]] = {}
-    for p in preds:
-        if p.result is not None:
-            label = f"{p.result.away}@{p.result.home}"
-            for flag in p.result.flags:
-                flags.setdefault(flag, []).append(label)
-    last, done = ratings_cutoff(schedules, season, week)
-    market = bool(set(settings.model.features) & set(MARKET_FEATURES))
-    injury_aware = lineup is not None
+    preds, frame, flags = run.predictions, run.frame, run.flags
+    last, done = run.ratings_through, run.completed_before
+    market, injury_aware = run.market, run.injury_aware
 
     if json_output:
         results = {p.game_id: p.result for p in preds}
@@ -836,13 +810,13 @@ def week(
         typer.echo(f"  not simulated: {row['away']}@{row['home']}: {row['error']}")
     if flags:
         typer.echo("\n  Flags:")
-        everyone = sum(p.result is not None for p in preds)
+        everyone = run.simulated
         for flag, labels in flags.items():
             where = "all games" if len(labels) == everyone > 1 else ", ".join(labels)
             typer.echo(f"  - {flag} ({where})")
     through = f"through week {last}" if last is not None else "none yet (prior season only)"
     typer.echo(f"\n  ratings: {season} games {through}; {done} completed before week {week}")
-    stamp = cached_at(cache, "pbp", season)
+    stamp = run.pbp_cached_at
     if stamp is not None:
         mode = " (offline: not refreshed)" if cache.offline else ""
         typer.echo(f"  play-by-play cached {stamp:%Y-%m-%d %H:%M}{mode}")
@@ -1250,3 +1224,29 @@ def player_eval(
             "better; top: projected top player had the most plays, higher is better)"
         )
         typer.echo(format_table(result, [(c, 4) for c in result.columns[3:]]))
+
+
+@app.command()
+def dashboard(
+    port: Annotated[int, typer.Option(help="Port to serve on.")] = 8501,
+    config: ConfigOption = None,
+) -> None:
+    """Open the Streamlit dashboard (needs the extra: `uv sync --extra dashboard`).
+
+    It reads the local data cache and never downloads; refresh it with `nflsim fetch`.
+    """
+    import importlib.util
+    import os
+    import subprocess
+    import sys
+
+    if importlib.util.find_spec("streamlit") is None:
+        raise typer.BadParameter(
+            "the dashboard needs Streamlit: run `uv sync --extra dashboard` first"
+        )
+    app_path = Path(__file__).parent / "dashboard" / "app.py"
+    env = dict(os.environ)
+    if config is not None:
+        env["NFLSIM_CONFIG"] = str(config.resolve())
+    cmd = [sys.executable, "-m", "streamlit", "run", str(app_path), "--server.port", str(port)]
+    raise typer.Exit(subprocess.call(cmd, env=env))
