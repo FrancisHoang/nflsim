@@ -29,10 +29,42 @@ from nflsim.model.availability import (
     lineups,
     player_availability,
     role_features,
+    sampled_player_features,
+    uncertain_players,
 )
 from nflsim.model.players import player_game_stats, rated_usage, team_player_features
 
 MATCHUP_ID = "SIM"
+# Second entry of the seed sequence for availability draws, so they never share a
+# random stream with the score draws (which use the seed alone).
+AVAILABILITY_STREAM = 1
+
+
+def availability_rng(seed: int) -> np.random.Generator:
+    """Random generator for availability draws, derived from the run's ``seed``."""
+    return np.random.default_rng([seed, AVAILABILITY_STREAM])
+
+
+def availability_runs(
+    games: pl.DataFrame,
+    model: PointsModel,
+    lineup: pl.DataFrame | None,
+    settings: Settings,
+    n: int,
+    seed: int,
+) -> dict[str, np.ndarray] | None:
+    """Per-run player features for ``games`` when availability is sampled, else None.
+
+    Sampled when lineups exist (``model.injury_aware``), ``sim.sample_availability`` is
+    set and the fitted model uses player features.
+    """
+    if (
+        lineup is None
+        or not settings.sim.sample_availability
+        or not set(model.features) & set(PLAYER_FEATURES)
+    ):
+        return None
+    return sampled_player_features(games, lineup, n, availability_rng(seed))
 
 
 def load_games(
@@ -42,25 +74,38 @@ def load_games(
 
     ``extra`` holds schedule-shaped rows to add, e.g. a hypothetical matchup.
     """
+    return load_games_with_lineups(cache, settings, last_season, extra)[0]
+
+
+def load_games_with_lineups(
+    cache: DataCache, settings: Settings, last_season: int, extra: pl.DataFrame | None = None
+) -> tuple[pl.DataFrame, pl.DataFrame | None]:
+    """``load_games`` plus the injury-aware lineups behind the player features.
+
+    The lineups (``nflsim.model.availability.lineups``) are None unless player features
+    are used and ``model.injury_aware`` is set. They let callers sample availability
+    per run (``availability_runs``).
+    """
     seasons = list(range(settings.data.default_first_season, last_season + 1))
     pbp = cache.scan("pbp", seasons)
     schedules = cache.load("schedules", seasons)
     if extra is not None:
         schedules = pl.concat([schedules, extra], how="diagonal_relaxed")
     team_games = team_game_stats(pbp, settings.ratings)
-    players = None
+    players = lineup = None
     if any(f in PLAYER_FEATURES for f in settings.model.features):
-        players = load_player_features(cache, settings, seasons, schedules)
-    return build_games(schedules, team_games, settings.ratings, players)
+        players, lineup = load_player_features(cache, settings, seasons, schedules)
+    return build_games(schedules, team_games, settings.ratings, players), lineup
 
 
 def load_player_features(
     cache: DataCache, settings: Settings, seasons: list[int], schedules: pl.DataFrame
-) -> pl.DataFrame:
+) -> tuple[pl.DataFrame, pl.DataFrame | None]:
     """Player-based team offense ratings for each scheduled team.
 
     The Phase 2 projection (``team_player_features``), or with ``model.injury_aware``
-    injury-aware lineups (``injury_aware_features``).
+    injury-aware lineups (``injury_aware_features``). Returns ``(features, lineup)``;
+    ``lineup`` is None for the Phase 2 projection.
     """
     rosters = roster_weeks(cache.load("rosters_weekly", seasons), cache.load("players"))
     player_games, role_totals = player_game_stats(
@@ -68,14 +113,15 @@ def load_player_features(
     )
     targets = schedule_targets(schedules)
     if not settings.model.injury_aware:
-        return team_player_features(
+        features = team_player_features(
             player_games, role_totals, rosters, targets, settings.player_ratings
         )
+        return features, None
     rated, lineup = load_lineups(
         cache, settings, seasons, targets, player_games, role_totals, rosters
     )
     reports = injury_reports(cache.load("injuries", seasons))
-    return injury_aware_features(targets, rated, lineup, reports)
+    return injury_aware_features(targets, rated, lineup, reports), lineup
 
 
 def injury_aware_features(
@@ -190,13 +236,24 @@ class MatchupResult:
     away_quantiles: dict[float, float]
     flags: list[str]
     model: PointsModel
+    sampled_availability: bool = False
 
 
 QUANTILES = (0.1, 0.25, 0.5, 0.75, 0.9)
 
 
-def predict_matchup(games: pl.DataFrame, settings: Settings, n: int, seed: int) -> MatchupResult:
-    """Simulate the ``MATCHUP_ID`` row of ``games``, fitting on seasons before its season."""
+def predict_matchup(
+    games: pl.DataFrame,
+    settings: Settings,
+    n: int,
+    seed: int,
+    lineup: pl.DataFrame | None = None,
+) -> MatchupResult:
+    """Simulate the ``MATCHUP_ID`` row of ``games``, fitting on seasons before its season.
+
+    With ``lineup`` (from ``load_games_with_lineups``), who plays is drawn per run when
+    ``sim.sample_availability`` is set (``availability_runs``).
+    """
     row = games.filter(pl.col("game_id") == MATCHUP_ID)
     if row.height != 1:
         raise ValueError("games must contain exactly one matchup row")
@@ -239,7 +296,8 @@ def predict_matchup(games: pl.DataFrame, settings: Settings, n: int, seed: int) 
             )
 
     model = fit_points_model(train, settings.model)
-    mu_home, mu_away = model.expected_points(row)
+    runs = availability_runs(row, model, lineup, settings, n, seed)
+    mu_home, mu_away = model.expected_points(row, runs)
     sim = simulate_scores(mu_home, mu_away, model.dispersion, n, seed, settings.sim.overtime_points)
 
     def quantiles(values: np.ndarray) -> dict[float, float]:
@@ -255,11 +313,34 @@ def predict_matchup(games: pl.DataFrame, settings: Settings, n: int, seed: int) 
         home_win_prob=float(sim.home_win_prob()[0]),
         mean_margin=float(sim.mean_margin()[0]),
         mean_total=float(sim.mean_total()[0]),
-        expected_home=float(mu_home[0]),
-        expected_away=float(mu_away[0]),
+        expected_home=float(np.mean(mu_home[0])),
+        expected_away=float(np.mean(mu_away[0])),
         margin_quantiles=quantiles(sim.margin[0]),
         home_quantiles=quantiles(sim.home[0]),
         away_quantiles=quantiles(sim.away[0]),
         flags=flags,
         model=model,
+        sampled_availability=runs is not None,
+    )
+
+
+def availability_report(
+    cache: DataCache, lineup: pl.DataFrame, result: MatchupResult, min_share: float
+) -> pl.DataFrame:
+    """Players in the matchup who may not play (``uncertain_players``), with names."""
+    targets = pl.DataFrame(
+        {
+            "season": [result.season] * 2,
+            "week": [result.week] * 2,
+            "team": [result.home, result.away],
+        }
+    )
+    names = cache.load("players").select("gsis_id", pl.col("display_name").alias("player"))
+    return (
+        uncertain_players(lineup, targets, min_share)
+        .join(names, on="gsis_id", how="left")
+        .with_columns(pl.col("player").fill_null(pl.col("gsis_id")))
+        .select(
+            "team", "player", "position", "role", "slot_share", "status", "practice", "play_prob"
+        )
     )

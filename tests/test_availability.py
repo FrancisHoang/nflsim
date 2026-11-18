@@ -347,3 +347,85 @@ def test_injury_aware_features_marks_report_and_matches_lineup_values() -> None:
     assert buf["player_proj_missing"] == 3  # no players projected at all
     expected = role_features(targets, expected_role_values(lineup), RATED)
     assert kc["off_qb"] == pytest.approx(expected.filter(pl.col("team") == "KC")["off_qb"][0])
+
+
+def matchup_games() -> pl.DataFrame:
+    return pl.DataFrame(
+        {
+            "season": [2024, 2024],
+            "week": [5, 5],
+            "home_team": ["KC", "NYJ"],
+            "away_team": ["BUF", "MIA"],
+        }
+    ).with_columns(pl.col("season", "week").cast(pl.Int32))
+
+
+def test_sampled_player_features_converge_to_expected_values() -> None:
+    from nflsim.model.availability import sampled_player_features
+
+    games = matchup_games()
+    runs = sampled_player_features(games, LINEUP, 40_000, np.random.default_rng(3))
+    assert set(runs) == {
+        f"{p}{f}" for p in ("h_", "a_") for f in ("off_qb", "off_rush", "off_recv")
+    }
+    assert runs["h_off_qb"].shape == (2, 40_000)
+    expected = {
+        (r["team"], r["role"]): r["value"]
+        for r in expected_role_values(LINEUP).iter_rows(named=True)
+    }
+    assert runs["h_off_qb"][0].mean() == pytest.approx(expected[("KC", "dropback")], abs=0.003)
+    assert runs["h_off_recv"][0].mean() == pytest.approx(expected[("KC", "target")], abs=0.003)
+    # BUF's only QB always plays; KC has no carry lineup; NYJ/MIA have no lineups at all.
+    assert np.all(runs["a_off_qb"][0] == pytest.approx(0.10))
+    assert np.all(runs["h_off_rush"][0] == 0.0)
+    assert not runs["h_off_qb"][1].any() and not runs["a_off_qb"][1].any()
+    again = sampled_player_features(games, LINEUP, 500, np.random.default_rng(3))
+    same = sampled_player_features(games, LINEUP, 500, np.random.default_rng(3))
+    assert all(np.array_equal(again[k], same[k]) for k in again)
+
+
+def test_availability_runs_only_when_enabled() -> None:
+    from nflsim.config import ModelConfig, Settings, SimConfig
+    from nflsim.model.points import PointsModel
+    from nflsim.pipeline import availability_runs
+
+    model = PointsModel(
+        features=("off_epa", "off_qb"),
+        intercept=0.0,
+        coefs=(1.0, 1.0),
+        home=1.0,
+        dispersion=6.0,
+        min_expected_points=3.0,
+        train_games=100,
+    )
+    on = Settings(model=ModelConfig(injury_aware=True))
+    off = on.model_copy(update={"sim": SimConfig(sample_availability=False)})
+    games = matchup_games()
+    runs = availability_runs(games, model, LINEUP, on, 10, seed=1)
+    assert runs is not None and runs["h_off_qb"].shape == (2, 10)
+    assert availability_runs(games, model, None, on, 10, seed=1) is None
+    assert availability_runs(games, model, LINEUP, off, 10, seed=1) is None
+    team_only = PointsModel(**{**model.__dict__, "features": ("off_epa",), "coefs": (1.0,)})
+    assert availability_runs(games, team_only, LINEUP, on, 10, seed=1) is None
+
+
+def test_uncertain_players_lists_doubtful_starters_only() -> None:
+    from nflsim.model.availability import uncertain_players
+
+    targets = pl.DataFrame({"season": [2024], "week": [5], "team": ["KC"]})
+    lineup = LINEUP.with_columns(
+        practice=pl.lit("none"),
+        status=pl.when(pl.col("gsis_id") == "qb1")
+        .then(pl.lit("questionable"))
+        .when(pl.col("gsis_id") == "wr1")
+        .then(pl.lit("out"))
+        .when(pl.col("gsis_id") == "te1")
+        .then(pl.lit("none"))
+        .otherwise(pl.lit("unlisted")),
+        play_prob=pl.when(pl.col("gsis_id") == "wr2").then(0.97).otherwise(pl.col("play_prob")),
+    )
+    out = uncertain_players(lineup, targets, min_share=0.05)
+    # qb1 (0.6) and wr1 (0.0) may not play. te1 is on the report but plays for sure;
+    # wr2 is not on the report (0.97 is the healthy-scratch rate); qb2 has no share.
+    assert sorted(out["gsis_id"].to_list()) == ["qb1", "wr1"]
+    assert uncertain_players(lineup, targets, min_share=0.9)["gsis_id"].to_list() == ["qb1"]

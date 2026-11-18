@@ -23,7 +23,7 @@ import polars as pl
 
 from nflsim.config import InjuriesConfig, PlayerRatingsConfig
 from nflsim.model.injuries import UNLISTED, attach_play_probability
-from nflsim.model.players import role_values_wide
+from nflsim.model.players import ROLE_FEATURES, role_values_wide
 
 _TEAM_WEEK = ["season", "week", "team"]
 _LINEUP = [*_TEAM_WEEK, "role", "position"]
@@ -341,6 +341,74 @@ def sample_role_values(
         repl = s.sum() - share.sum(axis=1)
         values[rows[i]] += share @ d + repl * packed.repl_dev[i]
     return role_keys, values
+
+
+def sampled_player_features(
+    games: pl.DataFrame, lineup: pl.DataFrame, n: int, rng: np.random.Generator
+) -> dict[str, FloatArray]:
+    """Per-run player features for each game: availability sampled ``n`` times.
+
+    ``games`` has ``season, week, home_team, away_team`` (current codes). Returns
+    ``h_off_qb`` ... ``a_off_recv`` arrays of shape ``(games, n)``. Roles without a
+    lineup (no projection) are 0, as in ``role_features``. The mean over runs converges
+    to ``expected_role_values``.
+    """
+    sides = {"h_": "home_team", "a_": "away_team"}
+    out = {
+        f"{prefix}{feature}": np.zeros((games.height, n))
+        for prefix in sides
+        for feature in ROLE_FEATURES.values()
+    }
+    targets = (
+        pl.concat([games.select("season", "week", pl.col(c).alias("team")) for c in sides.values()])
+        .unique()
+        .cast({"season": lineup.schema["season"], "week": lineup.schema["week"]})
+    )
+    sub = lineup.join(targets, on=_TEAM_WEEK, how="semi")
+    if sub.is_empty():
+        return out
+    keys, values = sample_role_values(sub, n, rng)
+    index = {k: i for i, k in enumerate(keys.iter_rows())}
+    for prefix, col in sides.items():
+        rows = games.select("season", "week", col).iter_rows()
+        for g, (season, week, team) in enumerate(rows):
+            for role, feature in ROLE_FEATURES.items():
+                i = index.get((season, week, team, role))
+                if i is not None:
+                    out[f"{prefix}{feature}"][g] = values[i]
+    return out
+
+
+def uncertain_players(
+    lineup: pl.DataFrame, targets: pl.DataFrame, min_share: float
+) -> pl.DataFrame:
+    """Players in ``targets`` team-weeks who are on the injury report, may not play
+    (``play_prob < 1``) and hold at least ``min_share`` of their role when healthy.
+
+    Regulars not on the report (who also play slightly under 100%) are left out.
+    """
+    keys = targets.select(*_TEAM_WEEK).cast(
+        {"season": lineup.schema["season"], "week": lineup.schema["week"]}
+    )
+    return (
+        lineup.join(keys, on=_TEAM_WEEK, how="semi")
+        .filter(
+            (pl.col("status") != UNLISTED)
+            & (pl.col("play_prob") < 1.0)
+            & (pl.col("slot_share") >= min_share)
+        )
+        .select(
+            "team",
+            "gsis_id",
+            "position",
+            "role",
+            "slot_share",
+            "status",
+            "practice",
+            "play_prob",
+        )
+        .sort("team", "position", -pl.col("slot_share"))
+    )
 
 
 def role_features(targets: pl.DataFrame, values: pl.DataFrame, rated: pl.DataFrame) -> pl.DataFrame:

@@ -16,7 +16,7 @@ home-minus-away features instead (see ``PointsModel``); the total is unchanged.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 
 import numpy as np
@@ -222,8 +222,16 @@ class PointsModel:
     margin_coefs: tuple[float, ...] | None = None
     margin_home: float = 0.0
 
-    def expected_points(self, games: pl.DataFrame) -> tuple[FloatArray, FloatArray]:
-        """Expected (home, away) points for each row of a ``build_games`` frame."""
+    def expected_points(
+        self, games: pl.DataFrame, runs: Mapping[str, FloatArray] | None = None
+    ) -> tuple[FloatArray, FloatArray]:
+        """Expected (home, away) points for each row of a ``build_games`` frame.
+
+        ``runs`` optionally maps ``h_<feature>``/``a_<feature>`` columns to per-run values
+        of shape ``(games, n)`` (e.g. sampled player availability). Those replace the
+        column in each run and the result has shape ``(games, n)``; features not in
+        ``runs`` keep their single value.
+        """
         league = games["league_ppg"].cast(pl.Float64).to_numpy()
         if np.isnan(league).any() or games["league_ppg"].null_count():
             raise ValueError("league_ppg is missing for some games; no prior data exists")
@@ -231,6 +239,11 @@ class PointsModel:
         coefs = np.asarray(self.coefs, dtype=np.float64)
         sign = games["home_sign"].to_numpy().astype(np.float64)
         base = league + self.intercept
+        used = {k: v for k, v in (runs or {}).items() if k[2:] in self.features}
+        if used:
+            x_home = _with_runs(x_home, self.features, used, "h_")
+            x_away = _with_runs(x_away, self.features, used, "a_")
+            base, sign = base[:, None], sign[:, None]
         mu_home = base + x_home @ coefs + self.home * sign
         mu_away = base + x_away @ coefs - self.home * sign
         if self.margin_coefs is not None:
@@ -240,6 +253,22 @@ class PointsModel:
             mu_home, mu_away = (total + margin) / 2, (total - margin) / 2
         floor = self.min_expected_points
         return np.maximum(mu_home, floor), np.maximum(mu_away, floor)
+
+
+def _with_runs(
+    x: FloatArray, features: Sequence[str], runs: Mapping[str, FloatArray], prefix: str
+) -> FloatArray:
+    """Design matrix (games x features) expanded to (games x runs x features), with the
+    per-run values of ``runs`` columns for this side."""
+    n = next(iter(runs.values())).shape[1]
+    out = np.repeat(x[:, None, :], n, axis=1)
+    for j, feature in enumerate(features):
+        values = runs.get(f"{prefix}{feature}")
+        if values is not None:
+            if values.shape != out.shape[:2]:
+                raise ValueError(f"{prefix}{feature} runs must have shape {out.shape[:2]}")
+            out[:, :, j] = values
+    return out
 
 
 def fit_points_model(games: pl.DataFrame, config: ModelConfig) -> PointsModel:

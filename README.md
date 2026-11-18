@@ -4,9 +4,9 @@ A Monte Carlo NFL game simulator. Given two teams and a week, it simulates the g
 times and reports win probability, score distributions, spread, total, and player stat
 lines, accounting for season stats, player matchups, and injuries on both rosters.
 
-> **Status:** Phases 0-2 done; Phase 3 (injuries) in progress. The game simulator and
-> backtest harness work. Player and injury features are built but opt-in, because they
-> have not yet beaten the Phase 1 baseline. See the [roadmap](#roadmap).
+> **Status:** Phases 0-3 done (Phase 3 not yet merged). The game simulator and backtest
+> harness work. Player and injury features are built but opt-in, because they have not
+> yet beaten the Phase 1 baseline. See the [roadmap](#roadmap).
 
 NFL outcomes are high-variance. The goal is a **well-calibrated** model, not certainty:
 every phase is backtested against the Phase 1 baseline, and a phase that doesn't improve
@@ -68,7 +68,9 @@ uv run nflsim simulate --home KC --away BUF --season 2025 --week 12 --n 10000 --
 uv run nflsim backtest --seasons 2021-2024 --n 10000 --seed 42
 ```
 
-Every simulation takes an explicit seed. The CLAUDE.md command list covers the
+Every simulation takes an explicit seed. To use player ratings and injury reports, pass a
+config with the player features and `injury_aware = true` under `[model]`; `simulate`
+then draws who plays in each run and lists players on the injury report who may not play. The CLAUDE.md command list covers the
 evaluation tools (`tune`, `player-eval`, `injury-eval`, `player-coverage`).
 
 ## Results
@@ -90,6 +92,7 @@ stay at the baseline):
 | Direct margin fit | 0.2246 | 0.6428 | 10.18 |
 | + player features (Phase 2) | 0.2255 | 0.6436 | 10.20 |
 | + injury-aware player features (Phase 3) | 0.2250 | 0.6428 | 10.18 |
+| ... with who plays drawn per run | 0.2250 | 0.6428 | 10.18 |
 
 ## Configuration
 
@@ -117,7 +120,7 @@ CI runs all four on Python 3.11 and 3.12 for every push and pull request. See
 | 0 | Scaffold, CI, cached data loaders | ✅ |
 | 1 | Baseline team-rating sim with shrinkage and a backtest harness (the benchmark) | ✅ |
 | 2 | Player-level ratings | ✅ (opt-in; no backtest gain) |
-| 3 | Injuries for both rosters, sampled per simulation | 🚧 play probabilities, next-man-up usage and injury-aware features done; per-run sampling in `simulate` next |
+| 3 | Injuries for both rosters, sampled per simulation | ✅ (opt-in; no significant backtest gain) |
 | 4 | Position-group and individual matchups | |
 | 5 | Tendencies, game script, drive/play-level engine | |
 | 6 | Context: home field, rest, travel, weather, coaching | |

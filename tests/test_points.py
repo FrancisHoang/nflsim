@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import Any
 
 import numpy as np
@@ -275,3 +276,41 @@ def test_build_games_passes_through_injury_report_flag() -> None:
     out = build_games(sched, games, RCFG, features).row(0, named=True)
     assert out["h_injury_report"] is True
     assert out["a_injury_report"] is False
+
+
+def test_expected_points_with_per_run_player_features() -> None:
+    games = synthetic_games(4, {"intercept": 0.0, "home": 1.0, "off_epa": 30.0}, seed=3)
+    games = games.with_columns(
+        h_off_qb=pl.lit(0.05), a_off_qb=pl.lit(-0.02), h_off_rush=pl.lit(0.0)
+    )
+    model = PointsModel(
+        features=("off_epa", "off_qb"),
+        intercept=0.5,
+        coefs=(30.0, 40.0),
+        home=1.0,
+        dispersion=6.0,
+        min_expected_points=3.0,
+        train_games=100,
+    )
+    mu_h, mu_a = model.expected_points(games)
+    n = 3
+    same = {"h_off_qb": np.full((4, n), 0.05), "a_off_qb": np.full((4, n), -0.02)}
+    run_h, run_a = model.expected_points(games, same)
+    assert run_h.shape == (4, n)
+    assert run_h == pytest.approx(np.repeat(mu_h[:, None], n, axis=1))
+    assert run_a == pytest.approx(np.repeat(mu_a[:, None], n, axis=1))
+    # Home QB out in run 1 (feature 0.05 -> -0.10): 40 * 0.15 = 6 points fewer.
+    runs = {"h_off_qb": np.array([[0.05, -0.10, 0.05]] * 4)}
+    run_h, run_a = model.expected_points(games, runs)
+    assert run_h[:, 1] == pytest.approx(mu_h - 6.0)
+    assert run_a == pytest.approx(np.repeat(mu_a[:, None], n, axis=1))
+    # Runs for features the model does not use are ignored.
+    unused, _ = model.expected_points(games, {"h_off_rush": np.zeros((4, n))})
+    assert unused.shape == (4,)
+    direct = replace(model, margin_coefs=(25.0, 40.0), margin_home=1.5)
+    d_h, d_a = direct.expected_points(games, runs)
+    flat_h, flat_a = direct.expected_points(games)
+    assert (d_h + d_a)[:, 0] == pytest.approx(flat_h + flat_a)
+    # Run 1: the margin fit moves the margin by 40 * -0.15; the total drops by 6 as well.
+    assert (d_h - d_a)[:, 1] == pytest.approx(flat_h - flat_a - 6.0)
+    assert (d_h + d_a)[:, 1] == pytest.approx(flat_h + flat_a - 6.0)

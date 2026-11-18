@@ -4,6 +4,9 @@ Each team's points are drawn independently from a negative binomial with the mod
 expected points and dispersion (historically, home and away scores are nearly
 uncorrelated). A tied simulation goes to overtime: the winner is drawn with probability
 proportional to each side's expected points and gets ``overtime_points``.
+
+Expected points can be one value per game, or one per game and run (e.g. when player
+availability is sampled per run).
 """
 
 from __future__ import annotations
@@ -51,13 +54,14 @@ def simulate_scores(
     seed: int,
     overtime_points: int,
 ) -> SimResult:
-    """Simulate ``n`` runs of each game. Same inputs and seed give identical output."""
-    mu_home = np.asarray(mu_home, dtype=np.float64).reshape(-1, 1)
-    mu_away = np.asarray(mu_away, dtype=np.float64).reshape(-1, 1)
-    if mu_home.shape != mu_away.shape:
+    """Simulate ``n`` runs of each game. Same inputs and seed give identical output.
+
+    ``mu_home``/``mu_away`` have shape ``(games,)`` or ``(games, n)`` (per-run means).
+    """
+    mu_home = _per_run(mu_home, n)
+    mu_away = _per_run(mu_away, n)
+    if mu_home.shape[0] != mu_away.shape[0]:
         raise ValueError("mu_home and mu_away must have the same length")
-    if n < 1:
-        raise ValueError("n must be at least 1")
     if dispersion <= 0 or (mu_home <= 0).any() or (mu_away <= 0).any():
         raise ValueError("dispersion and expected points must be positive")
 
@@ -72,3 +76,14 @@ def simulate_scores(
     home = home + np.where(tied & home_wins_ot, overtime_points, 0)
     away = away + np.where(tied & ~home_wins_ot, overtime_points, 0)
     return SimResult(home=home.astype(np.int64), away=away.astype(np.int64))
+
+
+def _per_run(mu: FloatArray, n: int) -> FloatArray:
+    if n < 1:
+        raise ValueError("n must be at least 1")
+    arr = np.asarray(mu, dtype=np.float64)
+    if arr.ndim == 2:
+        if arr.shape[1] != n:
+            raise ValueError(f"per-run expected points need {n} columns, got {arr.shape[1]}")
+        return arr
+    return arr.reshape(-1, 1)
