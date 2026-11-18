@@ -1,6 +1,6 @@
 # Phase 7 plan: scenarios and output
 
-Status: **proposed** (2026-11-17).
+Status: **in progress** (2026-11-17). Step 1 (live matchups) is done.
 
 ## Goal
 
@@ -39,6 +39,23 @@ stat lines) are backtested like everything else.
   practice, chance to play and role share. If there is no report yet: said plainly, and
   everyone is treated as available.
 - `--injuries/--no-injuries` to switch injury-aware player features on for one run.
+
+**Result (done, `nflsim.live`):**
+- `DataCache.load` already refetched stale current-season files whenever they were read,
+  so `simulate` was refreshing its data already; step 1 added `--offline` (never fetch;
+  use stale files; clear error for anything missing) and made the freshness visible.
+- `simulate` uses the scheduled game when the teams meet that week (site, game type,
+  roof, rest, weather). Swapped home/away is rejected with the right command; a played
+  game shows its final score next to the prediction.
+- "What I used": the scheduled game ID, the last completed week behind the ratings, when
+  the play-by-play was cached, each team's injury report size for the week, every player
+  listed out/doubtful/questionable **at all positions**, and whether injury-aware features
+  are on (`--injuries/--no-injuries` for one run). With them off it says the report does
+  not change the prediction; with them on, that only QB/RB/WR/TE count.
+- Fixed a Phase 3 bug found here: nflverse dropped `date_modified` from the 2025-2026
+  injury files, which crashed single-season loads (multi-season loads hid it).
+- Not possible from the data: whether a report is the final (Friday) one. The cached
+  files have no report dates from 2025, so the output gives the report's size instead.
 
 ### Step 2: overrides (both teams)
 

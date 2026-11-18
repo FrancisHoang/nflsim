@@ -32,7 +32,11 @@ class DataCache:
         config: DataConfig,
         datasets: Mapping[str, DatasetSpec] | None = None,
         today: dt.date | None = None,
+        offline: bool = False,
     ) -> None:
+        """``offline``: never download; use cached files as they are, even if stale, and
+        raise ``FileNotFoundError`` for anything not cached."""
+        self.offline = offline
         self.root = config.cache_dir
         self.max_age_seconds = config.current_season_max_age_hours * 3600
         self.datasets = DATASETS if datasets is None else datasets
@@ -98,6 +102,13 @@ class DataCache:
 
     def _ensure_one(self, spec: DatasetSpec, season: int | None, refresh: bool) -> Path:
         path = self.path(spec.name, season)
+        if self.offline:
+            if path.exists():
+                return path
+            what = spec.name if season is None else f"{spec.name} {season}"
+            raise FileNotFoundError(
+                f"{what} is not cached and offline mode is on; run `nflsim fetch` first"
+            )
         if not refresh and path.exists() and not self._is_stale(path, season):
             return path
 

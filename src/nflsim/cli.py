@@ -9,7 +9,7 @@ import polars as pl
 import typer
 
 from nflsim.backtest import calibration, format_table, summarize, walk_forward
-from nflsim.config import PLAYER_FEATURES, load_settings
+from nflsim.config import PLAYER_FEATURES, Settings, load_settings
 from nflsim.data import (
     DATASETS,
     PBP_PLAYER_COLUMNS,
@@ -34,15 +34,16 @@ from nflsim.injury_eval import (
     rate_table,
     report_outcomes,
 )
+from nflsim.live import Matchup, cached_at, find_matchup, ratings_cutoff, report_summary
 from nflsim.matchup_eval import coverage as matchup_coverage
 from nflsim.matchup_eval import pass_epa_gate, pressure_gate, rating_skill
 from nflsim.model.matchups import dropback_matchups, matchup_game_stats, matchup_ratings_as_of
 from nflsim.model.players import player_game_stats, usage_history
 from nflsim.pipeline import (
+    MatchupResult,
     availability_report,
     load_games_with_lineups,
     load_lineups,
-    matchup_row,
     predict_matchup,
 )
 from nflsim.player_eval import evaluate_injury_usage, evaluate_ratings, evaluate_usage
@@ -234,19 +235,45 @@ def simulate(
     n: Annotated[int, typer.Option(help="Number of simulations.", min=1)] = 10_000,
     seed: Annotated[int, typer.Option(help="RNG seed.")] = 42,
     neutral: Annotated[bool, typer.Option(help="Neutral site (no home-field value).")] = False,
+    injuries: Annotated[
+        bool | None,
+        typer.Option(
+            "--injuries/--no-injuries",
+            help="Use the injury report in the prediction (adds injury-aware player features "
+            "for this run). Default: config.",
+        ),
+    ] = None,
+    offline: Annotated[
+        bool,
+        typer.Option(help="Use cached data as it is; never download (stale data is used)."),
+    ] = False,
     config: ConfigOption = None,
 ) -> None:
-    """Simulate one game from ratings as of the given week."""
+    """Simulate one game from ratings as of the given week.
+
+    Uses the real scheduled game when the teams meet that week, refreshes current-season
+    data that is out of date (unless --offline), and prints what data it used.
+    """
     settings = load_settings(config)
-    extra = matchup_row(season, week, home, away, neutral)
-    cache = DataCache(settings.data)
-    games, lineup = load_games_with_lineups(cache, settings, season, extra=extra)
+    if injuries is not None:
+        features = settings.model.features
+        if injuries:
+            features = (*features, *[f for f in PLAYER_FEATURES if f not in features])
+        model_cfg = settings.model.model_copy(
+            update={"injury_aware": injuries, "features": features}
+        )
+        settings = settings.model_copy(update={"model": model_cfg})
+    cache = DataCache(settings.data, offline=offline)
     try:
+        schedules = cache.load("schedules", [season])
+        matchup = find_matchup(schedules, season, week, home, away, neutral)
+        games, lineup = load_games_with_lineups(cache, settings, season, extra=matchup.row)
         r = predict_matchup(games, settings, n, seed, lineup)
-    except ValueError as err:
+    except (ValueError, FileNotFoundError) as err:
         raise typer.BadParameter(str(err)) from err
 
-    site = "neutral site" if neutral else f"at {r.home}"
+    neutral_site = matchup.row["location"][0] == "Neutral"
+    site = "neutral site" if neutral_site else f"at {r.home}"
     typer.echo(f"{r.away} {site}, {r.season} week {r.week} ({r.n:,} simulations, seed {r.seed})")
     typer.echo(f"  {r.home} win probability: {r.home_win_prob:.1%}")
     typer.echo(f"  {r.away} win probability: {1 - r.home_win_prob:.1%}")
@@ -275,6 +302,62 @@ def simulate(
             )
     for flag in r.flags:
         typer.echo(f"  flag: {flag}")
+    _what_i_used(cache, settings, schedules, matchup, r, lineup is not None)
+
+
+def _what_i_used(
+    cache: DataCache,
+    settings: Settings,
+    schedules: pl.DataFrame,
+    matchup: Matchup,
+    r: MatchupResult,
+    injury_aware: bool,
+) -> None:
+    """Print where the game came from, how current the data is and the injury report."""
+    typer.echo("\nWhat I used")
+    if matchup.scheduled_id is None:
+        typer.echo("  game: not on the schedule that week; simulated as a hypothetical game")
+    else:
+        typer.echo(f"  game: {matchup.scheduled_id} from the schedule (site, roof, rest)")
+    last, done = ratings_cutoff(schedules, r.season, r.week)
+    through = f"through week {last}" if last is not None else "none yet (prior season only)"
+    typer.echo(f"  ratings: {r.season} games {through}; {done} completed before week {r.week}")
+    stamp = cached_at(cache, "pbp", r.season)
+    if stamp is not None:
+        mode = " (offline: not refreshed)" if cache.offline else ""
+        typer.echo(f"  play-by-play cached {stamp:%Y-%m-%d %H:%M}{mode}")
+
+    try:
+        reports = injury_reports(cache.load("injuries", [r.season]))
+    except (ValueError, FileNotFoundError) as err:
+        typer.echo(f"  injury report: unavailable ({err})")
+        return
+    counts, listed = report_summary(reports, r.season, r.week, (r.home, r.away))
+    sizes = ", ".join(f"{t} {k} players" for t, k in counts.items())
+    typer.echo(f"  injury report, week {r.week}: {sizes}")
+    if not any(counts.values()):
+        typer.echo(
+            "    none published yet (reports come out Wednesday-Friday); "
+            "everyone treated as available"
+        )
+    if injury_aware:
+        typer.echo(
+            "  injury-aware: on. Only QB, RB, WR and TE availability changes the prediction "
+            "(see 'May not play'); other positions are listed for information."
+        )
+    else:
+        typer.echo(
+            "  injury-aware: off. The injury report does not change this prediction "
+            "(use --injuries)."
+        )
+    if not listed.is_empty():
+        typer.echo("  " + format_table(listed).replace("\n", "\n  "))
+    if matchup.final is not None:
+        h, a = matchup.final
+        typer.echo(
+            f"  final score: {r.home} {h}, {r.away} {a} (already played; the ratings use "
+            "only earlier weeks)"
+        )
 
 
 @app.command()
