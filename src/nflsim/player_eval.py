@@ -18,6 +18,8 @@ from collections.abc import Iterable
 import polars as pl
 
 from nflsim.config import PlayerRatingsConfig
+from nflsim.model.availability import expected_lineups
+from nflsim.model.injuries import UNLISTED
 from nflsim.model.players import player_ratings_as_of, projected_usage
 
 _METHODS = ("position_mean", "season_to_date", "rating")
@@ -122,4 +124,84 @@ def evaluate_usage(
             pl.col("tv").filter(pl.col("ok")).mean().alias("tv_distance"),
         )
         .sort("role")
+    )
+
+
+def evaluate_injury_usage(
+    history: pl.DataFrame,
+    lineup: pl.DataFrame,
+    seasons: Iterable[int],
+    affected_min_share: float,
+) -> pl.DataFrame:
+    """Phase 2 projected usage vs. injury-aware expected usage, against actual shares.
+
+    ``lineup`` comes from ``nflsim.model.availability.lineups``. Reported per role for
+    all team-weeks and for ``affected`` ones (a player with a healthy share of at least
+    ``affected_min_share`` was on the injury report with a play probability below 1).
+
+    - ``se_*``: sum over players of the squared share error, averaged over team-weeks.
+      This is the right score for expected shares (it is minimized by the true mean).
+    - ``tv_*``: total-variation distance (half the summed absolute errors). Absolute
+      error favors betting everything on the likeliest outcome, so it penalizes honest
+      expectations; shown for comparison with the Phase 2 usage table.
+    - ``top_*``: share of team-weeks where the player projected the most usage had the
+      most.
+
+    The share expected to go to a replacement-level player counts as going to nobody.
+    """
+    wanted = list(seasons)
+    key = ["season", "week", "team", "role"]
+    methods = ("phase2", "injuries")
+    players, _ = expected_lineups(lineup.filter(pl.col("season").is_in(wanted)))
+    if players.is_empty():
+        raise ValueError("no lineups in the requested seasons")
+    proj = players.group_by(*key, "gsis_id").agg(
+        pl.col("slot_share").sum().alias("phase2"),
+        pl.col("expected_share").sum().alias("injuries"),
+    )
+    affected = players.group_by(key).agg(
+        (
+            (pl.col("slot_share") >= affected_min_share)
+            & (pl.col("status") != UNLISTED)
+            & (pl.col("play_prob") < 1.0)
+        )
+        .any()
+        .alias("affected")
+    )
+    actual = (
+        history.filter(pl.col("season").is_in(wanted))
+        .group_by(*key, "gsis_id")
+        .agg(pl.col("share").sum().alias("actual"))
+        .join(affected.select(key), on=key, how="semi")
+    )
+    both = proj.join(actual, on=[*key, "gsis_id"], how="full", coalesce=True).with_columns(
+        pl.col(*methods, "actual").fill_null(0.0)
+    )
+
+    def top(col: str) -> pl.Expr:
+        return pl.col("gsis_id").sort_by(col, "gsis_id", descending=[True, False]).first()
+
+    error = {m: pl.col(m) - pl.col("actual") for m in methods}
+    per_team = (
+        both.group_by(key)
+        .agg(
+            *[(error[m] ** 2).sum().alias(f"se_{m}") for m in methods],
+            *[(0.5 * error[m].abs().sum()).alias(f"tv_{m}") for m in methods],
+            *[(top(m) == top("actual")).alias(f"top_{m}") for m in methods],
+        )
+        .join(affected, on=key, how="inner")
+    )
+    columns = [f"{s}_{m}" for s in ("se", "tv", "top") for m in methods]
+    metrics = [pl.len().alias("team_weeks"), *[pl.col(c).mean() for c in columns]]
+    every = per_team.group_by("role").agg(*metrics).with_columns(subset=pl.lit("all"))
+    hit = (
+        per_team.filter("affected")
+        .group_by("role")
+        .agg(*metrics)
+        .with_columns(subset=pl.lit("affected"))
+    )
+    return (
+        pl.concat([every, hit])
+        .select("role", "subset", "team_weeks", *columns)
+        .sort("role", "subset", descending=[False, True])
     )

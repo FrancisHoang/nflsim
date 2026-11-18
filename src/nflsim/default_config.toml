@@ -92,6 +92,15 @@ play_probability_other.questionable = { dnp = 0.28, limited = 0.58, full = 0.77,
 play_probability_other.none = { dnp = 0.74, limited = 0.86, full = 0.89, none = 0.89 }
 # Regulars not on the report at all (misses are healthy scratches and roster moves).
 unlisted_regular = 0.97
+# Rostered non-regulars not on the report (backups): assumed available if needed.
+unlisted_other = 1.0
+# When a player is out, everyone below him at his position moves up one place and takes
+# that place's usage. Order: "usage" (projected usage, depth chart breaks ties such as
+# backup QBs with no recent snaps) or "depth" (depth chart first). Squared error of
+# expected usage vs. actual (`nflsim player-eval --injuries`), "usage" vs. "depth":
+# 2018-2022 dropback 0.151 vs. 0.171, carry 0.113 vs. 0.135 (Phase 2: 0.179, 0.131);
+# 2023-2025 holdout dropback 0.168 vs. 0.188 (Phase 2 0.206). Depth charts are often stale.
+backup_order = "usage"
 # Added to the questionable rate at these positions (clipped to [0, 1]). Questionable
 # regular QBs played 65% in 2016-2022 (n=120) and 50% in 2023-2025 (n=56), vs. ~79% for
 # other regulars. Other positions are within about 0.1 and not adjusted.

@@ -441,6 +441,41 @@ def role_means_as_of(player_games: pl.DataFrame, keys: pl.DataFrame) -> pl.DataF
     )
 
 
+def rated_usage(
+    player_games: pl.DataFrame,
+    team_games: pl.DataFrame,
+    rosters: pl.DataFrame,
+    targets: pl.DataFrame,
+    config: PlayerRatingsConfig,
+) -> pl.DataFrame:
+    """Projected usage of each candidate player with his rating, for ``targets`` team-weeks.
+
+    One row per (season, week, team, gsis_id, role) from ``projected_usage``, plus
+    ``position``, ``group``, ``rating`` and ``group_mean`` (``player_ratings_as_of``),
+    ``role_mean`` (``role_means_as_of``) and ``dev``: rating minus the league role
+    average (0 when the rating is unknown), the EPA per role play he adds.
+    """
+    targets = targets.select("season", "week", "team").unique()
+    history = usage_history(player_games, team_games, rosters, config)
+    usage = projected_usage(history, rosters, targets, config)
+    positions = rosters.select("season", "week", "gsis_id", "position").unique(
+        ["season", "week", "gsis_id"]
+    )
+    usage = usage.join(positions, on=["season", "week", "gsis_id"], how="left").with_columns(
+        _group(pl.col("role"), pl.col("position")).alias("group")
+    )
+    rated = player_ratings_as_of(player_games, usage, config).select(
+        "season", "week", "gsis_id", "role", "group", "rating", "group_mean"
+    )
+    means = role_means_as_of(player_games, targets)
+    return (
+        usage.join(rated, on=["season", "week", "gsis_id", "role", "group"], how="left")
+        .join(means, on=["season", "week", "role"], how="left")
+        .with_columns(dev=(pl.col("rating") - pl.col("role_mean")).fill_null(0.0))
+        .sort("season", "week", "team", "role", "gsis_id")
+    )
+
+
 def team_player_features(
     player_games: pl.DataFrame,
     team_games: pl.DataFrame,
@@ -459,30 +494,20 @@ def team_player_features(
     Returns ``season, week, team`` plus ``TEAM_PLAYER_COLUMNS``.
     """
     targets = targets.select("season", "week", "team").unique()
-    history = usage_history(player_games, team_games, rosters, config)
-    usage = projected_usage(history, rosters, targets, config)
-    positions = rosters.select("season", "week", "gsis_id", "position").unique(
-        ["season", "week", "gsis_id"]
+    usage = rated_usage(player_games, team_games, rosters, targets, config)
+    per_role = usage.group_by("season", "week", "team", "role").agg(
+        (pl.col("share") * pl.col("dev")).fill_null(0.0).sum().alias("value"),
+        pl.col("share").is_null().all().alias("missing"),
     )
-    usage = usage.join(positions, on=["season", "week", "gsis_id"], how="left").with_columns(
-        _group(pl.col("role"), pl.col("position")).alias("group")
-    )
-    rated = player_ratings_as_of(player_games, usage, config).select(
-        "season", "week", "gsis_id", "role", "group", "rating"
-    )
-    means = role_means_as_of(player_games, targets)
-    per_role = (
-        usage.join(rated, on=["season", "week", "gsis_id", "role", "group"], how="left")
-        .join(means, on=["season", "week", "role"], how="left")
-        .group_by("season", "week", "team", "role")
-        .agg(
-            (pl.col("share") * (pl.col("rating") - pl.col("role_mean")))
-            .fill_null(0.0)
-            .sum()
-            .alias("value"),
-            pl.col("share").is_null().all().alias("missing"),
-        )
-    )
+    return role_values_wide(targets, per_role)
+
+
+def role_values_wide(targets: pl.DataFrame, per_role: pl.DataFrame) -> pl.DataFrame:
+    """Pivot per-role ``value``/``missing`` rows to ``season, week, team`` + feature columns.
+
+    Team-weeks or roles absent from ``per_role`` count as missing with value 0.
+    """
+    targets = targets.select("season", "week", "team").unique()
     full = (
         targets.join(pl.DataFrame({"role": list(ROLES)}), how="cross")
         .join(per_role, on=["season", "week", "team", "role"], how="left")

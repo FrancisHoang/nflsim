@@ -8,7 +8,13 @@ import numpy as np
 import polars as pl
 
 from nflsim.config import PLAYER_FEATURES, Settings
-from nflsim.data import DataCache, roster_weeks
+from nflsim.data import (
+    DataCache,
+    depth_chart_weeks,
+    injury_reports,
+    player_snaps,
+    roster_weeks,
+)
 from nflsim.data.teams import TEAM_ALIASES, normalize_teams
 from nflsim.model import (
     PointsModel,
@@ -17,7 +23,8 @@ from nflsim.model import (
     simulate_scores,
     team_game_stats,
 )
-from nflsim.model.players import player_game_stats, team_player_features
+from nflsim.model.availability import depth_ranks, lineups, player_availability
+from nflsim.model.players import player_game_stats, rated_usage, team_player_features
 
 MATCHUP_ID = "SIM"
 
@@ -49,8 +56,15 @@ def load_player_features(
     player_games, role_totals = player_game_stats(
         cache.scan("pbp", seasons), rosters, settings.ratings
     )
+    return team_player_features(
+        player_games, role_totals, rosters, schedule_targets(schedules), settings.player_ratings
+    )
+
+
+def schedule_targets(schedules: pl.DataFrame) -> pl.DataFrame:
+    """``season, week, team`` for both teams of every scheduled game (current codes)."""
     sched = normalize_teams(schedules, ["home_team", "away_team"])
-    targets = pl.concat(
+    return pl.concat(
         [
             sched.select(
                 pl.col("season").cast(pl.Int32),
@@ -59,10 +73,36 @@ def load_player_features(
             )
             for c in ("home_team", "away_team")
         ]
+    ).unique()
+
+
+def load_lineups(
+    cache: DataCache,
+    settings: Settings,
+    seasons: list[int],
+    targets: pl.DataFrame,
+    player_games: pl.DataFrame,
+    role_totals: pl.DataFrame,
+    rosters: pl.DataFrame,
+) -> tuple[pl.DataFrame, pl.DataFrame]:
+    """Rated usage (Phase 2) and injury-aware lineups for ``targets`` team-weeks.
+
+    Returns ``(rated, lineup)``: ``rated`` from ``rated_usage`` and ``lineup`` from
+    ``nflsim.model.availability.lineups``. Injury reports, snap counts and depth charts
+    are loaded for ``seasons`` (snap counts from one season earlier, for week 1).
+    """
+    rated = rated_usage(player_games, role_totals, rosters, targets, settings.player_ratings)
+    first_snaps = max(min(seasons) - 1, cache.spec("snap_counts").first_season or 0)
+    players = cache.load("players")
+    snaps = player_snaps(cache.load("snap_counts", range(first_snaps, max(seasons) + 1)), players)
+    reports = injury_reports(cache.load("injuries", seasons))
+    depth = depth_chart_weeks(cache.load("depth_charts", seasons), cache.load("schedules", seasons))
+    candidates = rated.select("season", "week", "team", "gsis_id", "position").unique()
+    available = player_availability(candidates, reports, snaps, settings.injuries)
+    lineup = lineups(
+        rated, available, depth_ranks(depth), settings.injuries, settings.player_ratings
     )
-    return team_player_features(
-        player_games, role_totals, rosters, targets, settings.player_ratings
-    )
+    return rated, lineup
 
 
 def matchup_row(season: int, week: int, home: str, away: str, neutral: bool) -> pl.DataFrame:

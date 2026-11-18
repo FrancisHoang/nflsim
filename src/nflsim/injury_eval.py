@@ -15,6 +15,7 @@ from __future__ import annotations
 import polars as pl
 
 from nflsim.config import InjuriesConfig
+from nflsim.model.availability import previous_games, regulars_as_of, team_usage
 from nflsim.model.injuries import UNLISTED, attach_play_probability
 
 _KEY = ["season", "week", "team"]
@@ -22,30 +23,7 @@ _KEY = ["season", "week", "team"]
 
 def team_games(snaps: pl.DataFrame) -> pl.DataFrame:
     """Team-games with snap counts and the team's previous one (``prev_season/_week``)."""
-    return (
-        snaps.select(*_KEY)
-        .unique()
-        .sort("team", "season", "week")
-        .with_columns(
-            prev_season=pl.col("season").shift(1).over("team"),
-            prev_week=pl.col("week").shift(1).over("team"),
-        )
-    )
-
-
-def _usage(snaps: pl.DataFrame) -> pl.DataFrame:
-    """Per player-game: scrimmage snap share, total snaps and PFR position label."""
-    return (
-        snaps.filter(pl.col("id_matched"))
-        .group_by(*_KEY, "gsis_id")
-        .agg(
-            pl.max_horizontal(pl.col("offense_pct").max(), pl.col("defense_pct").max())
-            .fill_null(0.0)
-            .alias("share"),
-            pl.sum_horizontal("offense_snaps", "defense_snaps", "st_snaps").sum().alias("snaps"),
-            pl.col("snap_position").first(),
-        )
-    )
+    return previous_games(snaps, snaps.select(*_KEY).unique()).sort("team", "season", "week")
 
 
 def report_outcomes(
@@ -67,18 +45,8 @@ def report_outcomes(
     usage, so the report adds nothing for them.
     """
     games = team_games(snaps)
-    usage = _usage(snaps)
-    prev = usage.filter(pl.col("share") >= regular_min_share).select(
-        pl.col("season").alias("prev_season"),
-        pl.col("week").alias("prev_week"),
-        "team",
-        "gsis_id",
-        pl.col("snap_position").alias("prev_position"),
-        pl.lit(True).alias("regular"),
-    )
-    regulars = games.join(prev, on=["prev_season", "prev_week", "team"], how="inner").select(
-        *_KEY, "gsis_id", "prev_position", "regular"
-    )
+    usage = team_usage(snaps)
+    regulars = regulars_as_of(snaps, games, regular_min_share).with_columns(regular=pl.lit(True))
     listed = reports.join(games.select(_KEY), on=_KEY, how="semi").select(
         *_KEY, "gsis_id", "name", "position", "status", "practice"
     )
@@ -135,7 +103,7 @@ def depth_coverage(depth: pl.DataFrame, snaps: pl.DataFrame) -> pl.DataFrame:
     took the most offensive snaps among the team's QBs (when exactly one is listed).
     """
     games = team_games(snaps).select(_KEY)
-    usage = _usage(snaps)
+    usage = team_usage(snaps)
     charted = depth.select(_KEY).unique().with_columns(charted=pl.lit(True))
     starters = depth.filter(
         (pl.col("depth") == 1) & pl.col("side").is_in(["offense", "defense"])
