@@ -267,6 +267,11 @@ wp_windows = [[0.05, 0.95], [0.0, 1.0], [0.1, 0.9]]
 # 0.2254 -> 0.2224 (95% CI [-0.0062, +0.0002]), better in 3 of 4 seasons; 2017-2024
 # -0.0042 (CI [-0.0068, -0.0015]). Settings chosen before testing (not tuned).
 # docs/underconfidence.md.
+# The same settings fit scoring tendency from earlier weeks' closing totals,
+#   mkt_tot, opp_mkt_tot: total_line = league + t_home + t_away (opt-in).
+# Backtest 2021-2024 (2026-11-18), default + mkt_tot, opp_mkt_tot: total MAE -0.013 (95%
+# CI [-0.077, +0.049]), CRPS total -0.001 (CI [-0.040, +0.036]), 2 of 4 seasons; 2017-2024
+# worse. Fails its gate (docs/market-totals.md), so off by default.
 prior_games = 4.0
 carryover = 0.6
 prior_season_ridge = 0.5

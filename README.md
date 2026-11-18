@@ -120,6 +120,9 @@ under-confidence (actual vs. predicted margin slope 1.20 -> 0.92). It uses no fu
 information, but it does make the market an input, so the backtest also reports
 `pbp_only`, the same model without it, to keep an independent measure of the
 play-by-play ratings. Details: [docs/underconfidence.md](docs/underconfidence.md).
+The same idea for totals (`mkt_tot`, `opp_mkt_tot`, scoring tendency from earlier weeks'
+closing totals) did not help (total MAE -0.01, not significant) and stays opt-in:
+[docs/market-totals.md](docs/market-totals.md).
 
 **Quarterback change** (`qb_change`) is this week's starting QB's rating minus the rating of
 the QBs the team's ratings were built on. Most of the remaining gap to Vegas was late-season

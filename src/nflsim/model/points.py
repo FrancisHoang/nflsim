@@ -181,7 +181,7 @@ def build_games(
         .join(league_points_as_of(sched), on=["season", "week"], how="left")
         .join(context_columns(sched, context or ContextConfig()), on="game_id", how="left")
     )
-    mkt_cols = ["mkt", "mkt_games", "mkt_prior_games"]
+    mkt_cols = ["mkt", "mkt_tot", "mkt_games", "mkt_prior_games"]
     mkt = market_ratings(sched, market or MarketConfig()).select(
         "season", "week", "team", *mkt_cols
     )
@@ -290,6 +290,8 @@ def _features(offense: str, defense: str) -> dict[str, pl.Expr]:
         # Market strength (opt-in): the scoring team's and the opponent's.
         "mkt": pl.col(f"{offense}mkt"),
         "opp_mkt": pl.col(f"{defense}mkt"),
+        "mkt_tot": pl.col(f"{offense}mkt_tot"),
+        "opp_mkt_tot": pl.col(f"{defense}mkt_tot"),
     }
 
 
