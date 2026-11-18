@@ -252,3 +252,26 @@ def test_build_games_adds_player_features_with_league_average_fallback() -> None
     assert x_away[0, 0] == 0.0
     with pytest.raises(ValueError, match="player features"):
         design_matrices(build_games(sched, games, RCFG), ["off_qb"])
+
+
+def test_build_games_passes_through_injury_report_flag() -> None:
+    kinds = ["pass", "run"] * 5
+    rows = [play(2019, 1, "LV", "KC", 0.1, play_type=k) for k in kinds]
+    rows += [play(2019, 1, "KC", "LV", 0.3, play_type=k) for k in kinds]
+    games = team_game_stats(pbp(rows), RCFG)
+    sched = schedule([(2019, 2, "KC", "OAK", 28, 10)])
+    features = pl.DataFrame(
+        {
+            "season": [2019, 2019],
+            "week": [2, 2],
+            "team": ["KC", "LV"],
+            "off_qb": [0.05, 0.0],
+            "off_rush": [0.0, 0.0],
+            "off_recv": [0.0, 0.0],
+            "player_proj_missing": [0, 0],
+            "injury_report": [True, False],
+        }
+    )
+    out = build_games(sched, games, RCFG, features).row(0, named=True)
+    assert out["h_injury_report"] is True
+    assert out["a_injury_report"] is False

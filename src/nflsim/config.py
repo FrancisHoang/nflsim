@@ -89,6 +89,9 @@ class ModelConfig(BaseModel):
     # "direct": margin fit by its own regression on home-minus-away features; the total
     # still comes from the points model.
     margin_fit: Literal["points", "direct"] = "points"
+    # Player features (off_qb, off_rush, off_recv) from injury-aware lineups (Phase 3):
+    # expected usage given each player's play probability, backups moving up.
+    injury_aware: bool = False
 
     @model_validator(mode="after")
     def _unique_features(self) -> Self:

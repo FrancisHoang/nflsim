@@ -50,6 +50,14 @@ min_expected_points = 3.0
 #             and home field. The points model still sets the expected total. The points
 #             model leaves out effects between the two sides, which narrows its margins.
 margin_fit = "points"
+# Build the player features from injury-aware lineups (Phase 3): each projected player's
+# chance to play from the final injury report, with backups moving up when he is out
+# ([injuries]). Needs injuries, depth_charts and snap_counts cached. Team-weeks with no
+# injury report treat everyone as not on the report.
+# Backtest 2021-2024 (2026-11-17), six team features + player features: vs. Phase 2 player
+# features Brier -0.0004 (95% CI [-0.0014, +0.0004]); vs. the baseline Brier 0.2250 vs.
+# 0.2254 (CI [-0.0024, +0.0017]). Not significant, so off by default.
+injury_aware = false
 
 [player_ratings]
 # Player EPA ratings by role (Phase 2): dropback (QBs: passes, sacks, scrambles),
