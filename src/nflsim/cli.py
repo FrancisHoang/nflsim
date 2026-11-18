@@ -39,16 +39,19 @@ from nflsim.matchup_eval import coverage as matchup_coverage
 from nflsim.matchup_eval import pass_epa_gate, pressure_gate, rating_skill
 from nflsim.model.matchups import dropback_matchups, matchup_game_stats, matchup_ratings_as_of
 from nflsim.model.players import player_game_stats, usage_history
+from nflsim.model.stat_lines import Ranges, box_scores
 from nflsim.overrides import Override, OverrideKind, apply_overrides, resolve, week_roster
 from nflsim.pipeline import (
     MATCHUP_ID,
     MatchupResult,
     availability_report,
+    expected_stat_lines,
     load_games_with_lineups,
     load_lineups,
     predict_matchup,
 )
 from nflsim.player_eval import evaluate_injury_usage, evaluate_ratings, evaluate_usage
+from nflsim.stat_eval import baseline_per_game, evaluate_stat_lines
 from nflsim.tuning import current_params, evaluate, evaluate_holdout, grid
 
 app = typer.Typer(help="Monte Carlo NFL game simulator.", no_args_is_help=True)
@@ -265,6 +268,12 @@ def simulate(
         bool,
         typer.Option(help="With overrides: also run without them (same seed) and show both."),
     ] = False,
+    players: Annotated[
+        bool,
+        typer.Option(
+            "--players", help="Per-player stat lines with 10-90% ranges (uses the injury report)."
+        ),
+    ] = False,
     config: ConfigOption = None,
 ) -> None:
     """Simulate one game from ratings as of the given week.
@@ -280,10 +289,12 @@ def simulate(
         ("doubtful", doubtful),
     ]
     requested = [Override(kind, name) for kind, names in by_kind for name in names or []]
-    if requested and injuries is False:
-        raise typer.BadParameter("overrides need injury-aware features; drop --no-injuries")
-    if requested:
-        injuries = True  # overrides act through the injury-aware lineup
+    if (requested or players) and injuries is False:
+        raise typer.BadParameter(
+            "overrides and --players need injury-aware features; drop --no-injuries"
+        )
+    if requested or players:
+        injuries = True  # both act through the injury-aware lineup
     if injuries is not None:
         features = settings.model.features
         if injuries:
@@ -345,7 +356,81 @@ def simulate(
         typer.echo(f"  flag: {flag}")
     if effects is not None:
         _scenario(effects, r, base)
+    if players and lineup is not None:
+        _stat_lines(cache, settings, lineup, r)
     _what_i_used(cache, settings, schedules, matchup, r, lineup is not None)
+
+
+def _stat_lines(
+    cache: DataCache, settings: Settings, lineup: pl.DataFrame, r: MatchupResult
+) -> None:
+    """Print expected stat lines with ranges for both teams' main players."""
+    cfg = settings.stat_lines
+    seasons = [s for s in (r.season - 1, r.season) if s >= settings.data.default_first_season]
+    box = box_scores(cache.load("player_stats", seasons))
+    rosters = roster_weeks(cache.load("rosters_weekly", seasons), cache.load("players"))
+    positions = rosters.select("season", "week", "gsis_id", "position")
+    targets = pl.DataFrame(
+        {"season": [r.season] * 2, "week": [r.week] * 2, "team": [r.home, r.away]},
+        schema={"season": pl.Int32, "week": pl.Int32, "team": pl.String},
+    )
+    expected = expected_stat_lines(box, positions, lineup, targets, settings)
+    ranges = Ranges(cfg.low_quantile, cfg.high_quantile, cfg.range_low, cfg.range_high)
+    yards = ["passing_yards", "rushing_yards", "receiving_yards"]
+    shown = expected.filter(
+        pl.sum_horizontal([pl.col(f"exp_{s}") for s in yards]) >= cfg.display_min_yards
+    )
+    names = cache.load("players").select("gsis_id", pl.col("display_name").alias("player"))
+    pos = positions.filter((pl.col("season") == r.season) & (pl.col("week") <= r.week))
+    pos = pos.sort("week").unique("gsis_id", keep="last").select("gsis_id", "position")
+    shown = (
+        shown.join(names, on="gsis_id", how="left")
+        .join(pos, on="gsis_id", how="left")
+        .with_columns(pl.col("player").fill_null(pl.col("gsis_id")))
+    )
+    order = {"QB": 0, "RB": 1, "WR": 2, "TE": 3}
+    shown = shown.with_columns(
+        pl.col("position").replace_strict(order, default=9, return_dtype=pl.Int32).alias("_o"),
+        (pl.col("team") == r.away).alias("_away"),
+    ).sort("_away", "_o", -pl.col("exp_receiving_yards"), -pl.col("exp_rushing_yards"))
+
+    def cell(stat: str, values: list[float], digits: int) -> list[str]:
+        import numpy as np
+
+        e = np.asarray(values, dtype=np.float64)
+        lo, hi = ranges.interval(stat, e)
+        return [
+            "" if v < 0.5 * 10.0**-digits else f"{v:.{digits}f} ({a:.{digits}f}-{b:.{digits}f})"
+            for v, a, b in zip(e, lo, hi, strict=True)
+        ]
+
+    cols = {
+        "pass yds": ("passing_yards", 0),
+        "pass td": ("passing_tds", 1),
+        "rush yds": ("rushing_yards", 0),
+        "rush td": ("rushing_tds", 1),
+        "rec": ("receptions", 1),
+        "rec yds": ("receiving_yards", 0),
+        "rec td": ("receiving_tds", 1),
+    }
+    table = pl.DataFrame(
+        {
+            "team": shown["team"],
+            "player": shown["player"],
+            "pos": shown["position"].fill_null(""),
+            **{
+                label: cell(stat, shown[f"exp_{stat}"].to_list(), digits)
+                for label, (stat, digits) in cols.items()
+            },
+        }
+    )
+    lo_q, hi_q = cfg.low_quantile, cfg.high_quantile
+    typer.echo(
+        f"\nPlayer stat lines: expected ({lo_q:.0%}-{hi_q:.0%} range). From team volume x share x "
+        "rate, games\nbefore this week only. Rushing yards are no better than a player's "
+        "per-game average\n(2023-2025 check); the other stats beat it."
+    )
+    typer.echo("  " + format_table(table).replace("\n", "\n  "))
 
 
 def _scenario(effects: pl.DataFrame, r: MatchupResult, base: MatchupResult | None) -> None:
@@ -633,6 +718,53 @@ def drive_eval(
     typer.echo(f"Drives by season ({seasons}). score_match: share of games where drive")
     typer.echo("points equal both final scores. Result columns are shares of drives.")
     typer.echo(format_table(table, [(c, 3) for c in table.columns if c != "season"]))
+
+
+@app.command("stat-eval")
+def stat_eval(
+    fit_seasons: Annotated[
+        str, typer.Option(help="Seasons the ranges are fit on, e.g. '2018-2022'.")
+    ] = "2018-2022",
+    test_seasons: Annotated[
+        str, typer.Option(help="Seasons to score, e.g. '2023-2025'.")
+    ] = "2023-2025",
+    n_boot: Annotated[int, typer.Option(help="Bootstrap resamples of games.", min=100)] = 2000,
+    seed: Annotated[int, typer.Option(help="RNG seed for the bootstrap.")] = 42,
+    config: ConfigOption = None,
+) -> None:
+    """Per-player stat lines vs. each player's per-game average, out of sample (Phase 7)."""
+    settings = load_settings(config)
+    fit, test = parse_seasons(fit_seasons), parse_seasons(test_seasons)
+    if set(fit) & set(test):
+        raise typer.BadParameter("fit and test seasons must not overlap")
+    cache = DataCache(settings.data)
+    evals = sorted(set(fit) | set(test))
+    seasons = list(range(settings.data.default_first_season, max(evals) + 1))
+    rosters = roster_weeks(cache.load("rosters_weekly", seasons), cache.load("players"))
+    player_games, role_totals = player_game_stats(
+        cache.scan("pbp", seasons), rosters, settings.ratings
+    )
+    box = box_scores(cache.load("player_stats", seasons))
+    targets = box.filter(pl.col("season").is_in(evals)).select("season", "week", "team").unique()
+    _, lineup = load_lineups(cache, settings, evals, targets, player_games, role_totals, rosters)
+    positions = rosters.select("season", "week", "gsis_id", "position")
+    expected = expected_stat_lines(box, positions, lineup, targets, settings)
+    pairs = expected.join(box, on=["season", "week", "team", "gsis_id"], how="inner")
+    pairs = pairs.join(baseline_per_game(box, pairs), on=["season", "week", "gsis_id"], how="left")
+    cfg = settings.stat_lines
+    table, ranges = evaluate_stat_lines(
+        pairs, fit, test, cfg.low_quantile, cfg.high_quantile, cfg.min_expected, n_boot, seed
+    )
+    typer.echo(
+        f"Stat lines on {test_seasons} (player-games he played, with a baseline): model vs. his "
+        "per-game average\nso far (last season's before he plays). diff = MAE model - MAE "
+        "baseline (negative is better),\n95% CI from resampling games. in_range: share inside "
+        f"the {cfg.low_quantile:.0%}-{cfg.high_quantile:.0%} range fit on {fit_seasons}."
+    )
+    typer.echo(format_table(table, [(c, 3) for c in table.columns[2:]]))
+    typer.echo("\nScaled-error quantiles (config [stat_lines] range_low / range_high):")
+    for s in ranges.low:
+        typer.echo(f"  {s}: {ranges.low[s]:+.3f} / {ranges.high[s]:+.3f}")
 
 
 @app.command("injury-eval")
