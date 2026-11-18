@@ -129,6 +129,18 @@ uv run nflsim week --season 2026 --week 11
 uv run nflsim backtest --seasons 2021-2024 --n 10000 --seed 42
 ```
 
+### Dashboard
+
+```sh
+uv sync --extra dashboard
+uv run nflsim dashboard            # opens http://localhost:8501
+```
+
+A Streamlit front end over the same functions as the CLI: the week page shows every
+game of a week with the model next to the Vegas line, the winners picked once games are
+played, a model-vs-Vegas line chart, and the flags and data behind the predictions. It
+reads the local data cache and never downloads (run `nflsim fetch` first).
+
 Every simulation takes an explicit seed. To use player ratings and injury reports, pass a
 config with the player features and `injury_aware = true` under `[model]`; `simulate`
 then draws who plays in each run and lists players on the injury report who may not
