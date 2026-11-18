@@ -41,6 +41,9 @@ def injury_reports(injuries: pl.DataFrame) -> pl.DataFrame:
         practice_code = (
             pl.when(practice.str.starts_with(prefix)).then(pl.lit(code)).otherwise(practice_code)
         )
+    if "date_modified" not in injuries.columns:
+        # nflverse dropped this column from 2025 (those files have one row per player-week).
+        injuries = injuries.with_columns(date_modified=pl.lit(None, pl.Datetime("us", "UTC")))
     frame = (
         normalize_teams(injuries.filter(pl.col("gsis_id").is_not_null()), ["team"])
         .with_columns(pl.col("season", "week").cast(pl.Int32))

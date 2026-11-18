@@ -7,8 +7,9 @@ import time
 import polars as pl
 import pytest
 
+from nflsim.config import DataConfig
 from nflsim.data import DataCache, DatasetSpec
-from tests.conftest import FakeSource
+from tests.conftest import TODAY, FakeSource
 
 
 def test_first_load_fetches_and_writes_parquet(cache: DataCache, source: FakeSource) -> None:
@@ -105,3 +106,20 @@ def test_failed_fetch_leaves_no_file(cache: DataCache) -> None:
 def test_network_is_blocked() -> None:
     with pytest.raises(RuntimeError, match="network"):
         socket.create_connection(("example.com", 80))
+
+
+def test_offline_uses_stale_files_and_never_fetches(cache: DataCache, source: FakeSource) -> None:
+    cache.load("games", [2024])  # 2024 is the current season in the fixture
+    path = cache.path("games", 2024)
+    old = time.time() - 30 * 3600  # older than the 12-hour staleness limit
+    os.utime(path, (old, old))
+    offline = DataCache(
+        DataConfig(cache_dir=cache.root, current_season_max_age_hours=12),
+        datasets=cache.datasets,
+        today=TODAY,
+        offline=True,
+    )
+    assert offline.load("games", [2024]).height == 2
+    assert source.calls == [("games", 2024)]  # no refetch despite staleness
+    with pytest.raises(FileNotFoundError, match="offline"):
+        offline.load("games", [2021])

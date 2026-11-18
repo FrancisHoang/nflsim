@@ -340,3 +340,24 @@ def test_depth_coverage() -> None:
     assert cov["charted"] == pytest.approx(1 / 3)  # KC week 1 only
     assert cov["starters_played"] == pytest.approx(2 / 3)
     assert cov["qb_starter_led"] == 1.0
+
+
+def test_injury_reports_without_date_modified() -> None:
+    # nflverse dropped date_modified from 2025; those files have one row per player-week.
+    raw = pl.DataFrame(
+        {
+            "season": [2025.0],
+            "week": [3.0],
+            "game_type": ["REG"],
+            "team": ["OAK"],
+            "gsis_id": ["00-1"],
+            "full_name": ["A Player"],
+            "position": ["CB"],
+            "report_status": ["Out"],
+            "practice_status": ["Did Not Participate In Practice"],
+            "report_primary_injury": ["Knee"],
+            "practice_primary_injury": [None],
+        }
+    )
+    row = injury_reports(raw).row(0, named=True)
+    assert (row["team"], row["status"], row["practice"]) == ("LV", "out", "dnp")
