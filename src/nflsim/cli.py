@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import datetime as dt
+import json
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Annotated
 
@@ -52,6 +55,14 @@ from nflsim.pipeline import (
 )
 from nflsim.player_eval import evaluate_injury_usage, evaluate_ratings, evaluate_usage
 from nflsim.stat_eval import baseline_per_game, evaluate_stat_lines
+from nflsim.summary import (
+    LineResult,
+    format_spread,
+    game_lines,
+    line_dict,
+    quantile_dict,
+    records,
+)
 from nflsim.tuning import current_params, evaluate, evaluate_holdout, grid
 
 app = typer.Typer(help="Monte Carlo NFL game simulator.", no_args_is_help=True)
@@ -274,6 +285,20 @@ def simulate(
             "--players", help="Per-player stat lines with 10-90% ranges (uses the injury report)."
         ),
     ] = False,
+    spread: Annotated[
+        float | None,
+        typer.Option(
+            help="Home team's spread, sportsbook style (-3.5 = home favored by 3.5). "
+            "Default: the scheduled game's nflverse line, if any.",
+        ),
+    ] = None,
+    total: Annotated[
+        float | None,
+        typer.Option(help="Game total line. Default: the scheduled game's nflverse line."),
+    ] = None,
+    json_output: Annotated[
+        bool, typer.Option("--json", help="Print the full result as JSON instead of text.")
+    ] = False,
     config: ConfigOption = None,
 ) -> None:
     """Simulate one game from ratings as of the given week.
@@ -325,6 +350,52 @@ def simulate(
         raise typer.BadParameter(str(err)) from err
 
     neutral_site = matchup.row["location"][0] == "Neutral"
+    lines = game_lines(
+        r.home_scores - r.away_scores,
+        r.home_scores + r.away_scores,
+        spread,
+        total,
+        matchup.spread_line,
+        matchup.total_line,
+    )
+    report = None
+    if lineup is not None:
+        report = availability_report(cache, lineup, r, settings.sim.report_min_share)
+    stat_frame = None
+    if players and lineup is not None:
+        stat_frame = _stat_line_frame(cache, settings, lineup, r)
+    used = _used(cache, schedules, matchup, r, lineup is not None)
+
+    if json_output:
+        payload = {
+            "game": {
+                "home": r.home,
+                "away": r.away,
+                "season": r.season,
+                "week": r.week,
+                "neutral": neutral_site,
+                "scheduled_id": matchup.scheduled_id,
+                "final": dict(zip(("home", "away"), matchup.final, strict=True))
+                if matchup.final
+                else None,
+            },
+            "simulation": {
+                "n": r.n,
+                "seed": r.seed,
+                "sampled_availability": r.sampled_availability,
+            },
+            "result": _result_dict(r),
+            "lines": [line_dict(x) for x in lines],
+            "flags": r.flags,
+            "may_not_play": records(report) if report is not None else None,
+            "overrides": records(effects) if effects is not None else None,
+            "without_overrides": _result_dict(base) if base is not None else None,
+            "players": records(stat_frame) if stat_frame is not None else None,
+            "used": _used_dict(used),
+        }
+        typer.echo(json.dumps(payload, indent=2))
+        return
+
     site = "neutral site" if neutral_site else f"at {r.home}"
     typer.echo(f"{r.away} {site}, {r.season} week {r.week} ({r.n:,} simulations, seed {r.seed})")
     typer.echo(f"  {r.home} win probability: {r.home_win_prob:.1%}")
@@ -340,9 +411,10 @@ def simulate(
         ("margin", r.margin_quantiles),
     ):
         typer.echo(f"  {label:<11}" + "  ".join(f"{values[q]:>5.0f}" for q in qs))
-    if lineup is not None:
+    if lines:
+        _print_lines(lines, r)
+    if report is not None:
         min_share = settings.sim.report_min_share
-        report = availability_report(cache, lineup, r, min_share)
         how = "drawn per run" if r.sampled_availability else "expected value in every run"
         typer.echo(f"\n  May not play (healthy share >= {min_share:.0%}; availability {how}):")
         if report.is_empty():
@@ -356,15 +428,49 @@ def simulate(
         typer.echo(f"  flag: {flag}")
     if effects is not None:
         _scenario(effects, r, base)
-    if players and lineup is not None:
-        _stat_lines(cache, settings, lineup, r)
-    _what_i_used(cache, settings, schedules, matchup, r, lineup is not None)
+    if stat_frame is not None:
+        _print_stat_lines(stat_frame, settings)
+    _print_used(used, r)
 
 
-def _stat_lines(
+def _result_dict(r: MatchupResult) -> dict[str, object]:
+    return {
+        "home_win_prob": r.home_win_prob,
+        "away_win_prob": 1 - r.home_win_prob,
+        "expected_points": {"home": r.expected_home, "away": r.expected_away},
+        "mean_margin": r.mean_margin,
+        "mean_total": r.mean_total,
+        "quantiles": {
+            "home_points": quantile_dict(r.home_quantiles),
+            "away_points": quantile_dict(r.away_quantiles),
+            "margin": quantile_dict(r.margin_quantiles),
+        },
+    }
+
+
+def _print_lines(lines: list[LineResult], r: MatchupResult) -> None:
+    """Cover and over chances against each line (pushes counted separately)."""
+    typer.echo("\n  Lines (chances from the simulated scores; the lines are not a model input):")
+    for x in lines:
+        where = "given" if x.source == "given" else "nflverse line"
+        push = f", push {x.push:.1%}" if x.push > 0 else ""
+        if x.kind == "spread":
+            label = format_spread(r.home, x.line)
+            typer.echo(
+                f"  spread {label} ({where}): {r.home} covers {x.win:.1%}, "
+                f"{r.away} covers {x.lose:.1%}{push}"
+            )
+        else:
+            typer.echo(f"  total {x.line:g} ({where}): over {x.win:.1%}, under {x.lose:.1%}{push}")
+
+
+def _stat_line_frame(
     cache: DataCache, settings: Settings, lineup: pl.DataFrame, r: MatchupResult
-) -> None:
-    """Print expected stat lines with ranges for both teams' main players."""
+) -> pl.DataFrame:
+    """Expected stat lines with ranges (``exp_``, ``low_``, ``high_`` per stat) for both
+    teams' main players, home team first, then QB, RB, WR, TE."""
+    import numpy as np
+
     cfg = settings.stat_lines
     seasons = [s for s in (r.season - 1, r.season) if s >= settings.data.default_first_season]
     box = box_scores(cache.load("player_stats", seasons))
@@ -393,38 +499,54 @@ def _stat_lines(
         pl.col("position").replace_strict(order, default=9, return_dtype=pl.Int32).alias("_o"),
         (pl.col("team") == r.away).alias("_away"),
     ).sort("_away", "_o", -pl.col("exp_receiving_yards"), -pl.col("exp_rushing_yards"))
-
-    def cell(stat: str, values: list[float], digits: int) -> list[str]:
-        import numpy as np
-
-        e = np.asarray(values, dtype=np.float64)
-        lo, hi = ranges.interval(stat, e)
-        return [
-            "" if v < 0.5 * 10.0**-digits else f"{v:.{digits}f} ({a:.{digits}f}-{b:.{digits}f})"
-            for v, a, b in zip(e, lo, hi, strict=True)
-        ]
-
-    cols = {
-        "pass yds": ("passing_yards", 0),
-        "pass td": ("passing_tds", 1),
-        "rush yds": ("rushing_yards", 0),
-        "rush td": ("rushing_tds", 1),
-        "rec": ("receptions", 1),
-        "rec yds": ("receiving_yards", 0),
-        "rec td": ("receiving_tds", 1),
-    }
-    table = pl.DataFrame(
+    columns: dict[str, pl.Series] = {}
+    for stat in _STAT_COLUMNS.values():
+        e = shown[f"exp_{stat[0]}"].to_numpy().astype(np.float64)
+        lo, hi = ranges.interval(stat[0], e)
+        columns[f"exp_{stat[0]}"] = pl.Series(e)
+        columns[f"low_{stat[0]}"] = pl.Series(np.asarray(lo, dtype=np.float64))
+        columns[f"high_{stat[0]}"] = pl.Series(np.asarray(hi, dtype=np.float64))
+    return pl.DataFrame(
         {
             "team": shown["team"],
             "player": shown["player"],
-            "pos": shown["position"].fill_null(""),
-            **{
-                label: cell(stat, shown[f"exp_{stat}"].to_list(), digits)
-                for label, (stat, digits) in cols.items()
-            },
+            "gsis_id": shown["gsis_id"],
+            "position": shown["position"],
+            **columns,
         }
     )
-    lo_q, hi_q = cfg.low_quantile, cfg.high_quantile
+
+
+_STAT_COLUMNS = {
+    "pass yds": ("passing_yards", 0),
+    "pass td": ("passing_tds", 1),
+    "rush yds": ("rushing_yards", 0),
+    "rush td": ("rushing_tds", 1),
+    "rec": ("receptions", 1),
+    "rec yds": ("receiving_yards", 0),
+    "rec td": ("receiving_tds", 1),
+}
+
+
+def _print_stat_lines(frame: pl.DataFrame, settings: Settings) -> None:
+    """Print ``_stat_line_frame`` as ``expected (low-high)`` cells."""
+
+    def cell(stat: str, digits: int) -> list[str]:
+        rows = zip(frame[f"exp_{stat}"], frame[f"low_{stat}"], frame[f"high_{stat}"], strict=True)
+        return [
+            "" if v < 0.5 * 10.0**-digits else f"{v:.{digits}f} ({a:.{digits}f}-{b:.{digits}f})"
+            for v, a, b in rows
+        ]
+
+    table = pl.DataFrame(
+        {
+            "team": frame["team"],
+            "player": frame["player"],
+            "pos": frame["position"].fill_null(""),
+            **{label: cell(stat, digits) for label, (stat, digits) in _STAT_COLUMNS.items()},
+        }
+    )
+    lo_q, hi_q = settings.stat_lines.low_quantile, settings.stat_lines.high_quantile
     typer.echo(
         f"\nPlayer stat lines: expected ({lo_q:.0%}-{hi_q:.0%} range). From team volume x share x "
         "rate, games\nbefore this week only. Rushing yards are no better than a player's "
@@ -474,42 +596,90 @@ def _scenario(effects: pl.DataFrame, r: MatchupResult, base: MatchupResult | Non
     )
 
 
-def _what_i_used(
+@dataclass(frozen=True)
+class _Used:
+    """What a simulation used: the game, how current the data is and the injury report."""
+
+    scheduled_id: str | None
+    last_week: int | None
+    completed: int
+    pbp_cached: dt.datetime | None
+    offline: bool
+    injury_aware: bool
+    final: tuple[int, int] | None
+    report_error: str | None = None
+    report_counts: dict[str, int] | None = None
+    listed: pl.DataFrame | None = None
+
+
+def _used(
     cache: DataCache,
-    settings: Settings,
     schedules: pl.DataFrame,
     matchup: Matchup,
     r: MatchupResult,
     injury_aware: bool,
-) -> None:
-    """Print where the game came from, how current the data is and the injury report."""
-    typer.echo("\nWhat I used")
-    if matchup.scheduled_id is None:
-        typer.echo("  game: not on the schedule that week; simulated as a hypothetical game")
-    else:
-        typer.echo(f"  game: {matchup.scheduled_id} from the schedule (site, roof, rest)")
+) -> _Used:
     last, done = ratings_cutoff(schedules, r.season, r.week)
-    through = f"through week {last}" if last is not None else "none yet (prior season only)"
-    typer.echo(f"  ratings: {r.season} games {through}; {done} completed before week {r.week}")
-    stamp = cached_at(cache, "pbp", r.season)
-    if stamp is not None:
-        mode = " (offline: not refreshed)" if cache.offline else ""
-        typer.echo(f"  play-by-play cached {stamp:%Y-%m-%d %H:%M}{mode}")
-
+    base = _Used(
+        scheduled_id=matchup.scheduled_id,
+        last_week=last,
+        completed=done,
+        pbp_cached=cached_at(cache, "pbp", r.season),
+        offline=cache.offline,
+        injury_aware=injury_aware,
+        final=matchup.final,
+    )
     try:
         reports = injury_reports(cache.load("injuries", [r.season]))
     except (ValueError, FileNotFoundError) as err:
-        typer.echo(f"  injury report: unavailable ({err})")
-        return
+        return replace(base, report_error=str(err))
     counts, listed = report_summary(reports, r.season, r.week, (r.home, r.away))
-    sizes = ", ".join(f"{t} {k} players" for t, k in counts.items())
+    return replace(base, report_counts=counts, listed=listed)
+
+
+def _used_dict(u: _Used) -> dict[str, object]:
+    return {
+        "scheduled_id": u.scheduled_id,
+        "ratings_through_week": u.last_week,
+        "completed_games_before_week": u.completed,
+        "pbp_cached_at": u.pbp_cached.isoformat(timespec="minutes") if u.pbp_cached else None,
+        "offline": u.offline,
+        "injury_aware": u.injury_aware,
+        "injury_report_error": u.report_error,
+        "injury_report_players": u.report_counts,
+        "injury_report": records(u.listed),
+    }
+
+
+def _print_used(u: _Used, r: MatchupResult) -> None:
+    """Print where the game came from, how current the data is and the injury report."""
+    typer.echo("\nWhat I used")
+    if u.scheduled_id is None:
+        typer.echo("  game: not on the schedule that week; simulated as a hypothetical game")
+    else:
+        typer.echo(f"  game: {u.scheduled_id} from the schedule (site, roof, rest)")
+    through = (
+        f"through week {u.last_week}"
+        if u.last_week is not None
+        else ("none yet (prior season only)")
+    )
+    typer.echo(
+        f"  ratings: {r.season} games {through}; {u.completed} completed before week {r.week}"
+    )
+    if u.pbp_cached is not None:
+        mode = " (offline: not refreshed)" if u.offline else ""
+        typer.echo(f"  play-by-play cached {u.pbp_cached:%Y-%m-%d %H:%M}{mode}")
+    if u.report_error is not None or u.report_counts is None:
+        typer.echo(f"  injury report: unavailable ({u.report_error})")
+        return
+    sizes = ", ".join(f"{t} {k} players" for t, k in u.report_counts.items())
     typer.echo(f"  injury report, week {r.week}: {sizes}")
-    if not any(counts.values()):
+    if not any(u.report_counts.values()):
         typer.echo(
             "    none published yet (reports come out Wednesday-Friday); "
             "everyone treated as available"
         )
-    if injury_aware:
+    if u.injury_aware:
         typer.echo(
             "  injury-aware: on. Only QB, RB, WR and TE availability changes the prediction "
             "(see 'May not play'); other positions are listed for information."
@@ -519,10 +689,10 @@ def _what_i_used(
             "  injury-aware: off. The injury report does not change this prediction "
             "(use --injuries)."
         )
-    if not listed.is_empty():
-        typer.echo("  " + format_table(listed).replace("\n", "\n  "))
-    if matchup.final is not None:
-        h, a = matchup.final
+    if u.listed is not None and not u.listed.is_empty():
+        typer.echo("  " + format_table(u.listed).replace("\n", "\n  "))
+    if u.final is not None:
+        h, a = u.final
         typer.echo(
             f"  final score: {r.home} {h}, {r.away} {a} (already played; the ratings use "
             "only earlier weeks)"

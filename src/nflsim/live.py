@@ -25,6 +25,9 @@ class Matchup:
     row: pl.DataFrame  # schedule-shaped, game_id = MATCHUP_ID
     scheduled_id: str | None  # nflverse game_id when the game is on the schedule
     final: tuple[int, int] | None  # (home, away) score when it has been played
+    # nflverse lines for the scheduled game (spread_line > 0 when home is favored).
+    spread_line: float | None = None
+    total_line: float | None = None
 
 
 def _code(team: str) -> str:
@@ -65,7 +68,14 @@ def find_matchup(
     final = None
     if info.get("home_score") is not None and info.get("away_score") is not None:
         final = (int(info["home_score"]), int(info["away_score"]))
-    return Matchup(row.hstack(context), str(info["game_id"]), final)
+    spread, total = info.get("spread_line"), info.get("total_line")
+    return Matchup(
+        row.hstack(context),
+        str(info["game_id"]),
+        final,
+        float(spread) if spread is not None else None,
+        float(total) if total is not None else None,
+    )
 
 
 def ratings_cutoff(schedules: pl.DataFrame, season: int, week: int) -> tuple[int | None, int]:

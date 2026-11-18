@@ -21,6 +21,8 @@ SCHEDULES = pl.DataFrame(
         "away_rest": [10, 7, 7, 7],
         "temp": [70, None, None, 75],
         "wind": [5, None, None, 3],
+        "spread_line": [-7.0, None, 3.5, -3.0],
+        "total_line": [52.5, None, 47.0, 51.0],
     },
     schema_overrides={"season": pl.Int32, "week": pl.Int32},
 )
@@ -35,12 +37,14 @@ def test_find_matchup_uses_the_scheduled_game() -> None:
     assert (row["home_rest"], row["away_rest"], row["wind"]) == (7, 10, 5)
     assert row["home_score"] is None  # the simulated row never carries the result
     assert m.final == (10, 28)
+    assert (m.spread_line, m.total_line) == (-7.0, 52.5)
 
 
 def test_find_matchup_keeps_neutral_sites_and_checks_orientation() -> None:
     m = find_matchup(SCHEDULES, 2019, 3, "NE", "BUF", neutral=False)
     assert m.row["location"][0] == "Neutral"
     assert m.final is None
+    assert (m.spread_line, m.total_line) == (None, None)  # no line published
     with pytest.raises(ValueError, match="use --home LV --away KC"):
         find_matchup(SCHEDULES, 2019, 3, "KC", "LV", neutral=False)
     with pytest.raises(ValueError, match="not at a neutral site"):
@@ -50,6 +54,7 @@ def test_find_matchup_keeps_neutral_sites_and_checks_orientation() -> None:
 def test_find_matchup_falls_back_to_a_hypothetical_game() -> None:
     m = find_matchup(SCHEDULES, 2019, 5, "KC", "BUF", neutral=True)
     assert m.scheduled_id is None and m.final is None
+    assert m.spread_line is None and m.total_line is None
     assert m.row["location"][0] == "Neutral"
 
 
