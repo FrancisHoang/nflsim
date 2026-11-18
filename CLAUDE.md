@@ -60,7 +60,7 @@ Monte Carlo simulator for single NFL games. Given two teams and a week, it simul
 Mark phases done here as they merge.
 
 ## Current status
-Phases 0-2 done and merged to `main` (Phase 1 via PR #1, Phase 2 via PRs #4-#6), CI green on Python 3.11 and 3.12. Phase 3 (injuries) is complete on branch `feat/injury-availability`, not yet merged. Neither Phase 2 player features nor Phase 3 injury-aware features significantly beat the Phase 1 baseline, so both are opt-in and the baseline below is still the benchmark.
+Phases 0-3 done and merged to `main` (Phase 1 via PR #1, Phase 2 via PRs #4-#6, Phase 3 via PRs #7-#8), CI green on Python 3.11 and 3.12. Neither Phase 2 player features nor Phase 3 injury-aware features significantly beat the Phase 1 baseline, so both are opt-in and the baseline below is still the benchmark.
 
 Phase 1 baseline (the benchmark; `nflsim backtest --seasons 2021-2024 --n 10000 --seed 42`, 1,139 games):
 

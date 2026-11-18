@@ -4,7 +4,7 @@ A Monte Carlo NFL game simulator. Given two teams and a week, it simulates the g
 times and reports win probability, score distributions, spread, total, and player stat
 lines, accounting for season stats, player matchups, and injuries on both rosters.
 
-> **Status:** Phases 0-3 done (Phase 3 not yet merged). The game simulator and backtest
+> **Status:** Phases 0-3 done. The game simulator and backtest
 > harness work. Player and injury features are built but opt-in, because they have not
 > yet beaten the Phase 1 baseline. See the [roadmap](#roadmap).
 
